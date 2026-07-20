@@ -97,8 +97,11 @@ func Size() (int, int) {
 	return int(ws.Col), int(ws.Row)
 }
 
+func HideCursor() { _, _ = os.Stdout.Write([]byte("\033[?25l")) }
+func ShowCursor() { _, _ = os.Stdout.Write([]byte("\033[?25h")) }
+
 // CUP — Cursor Position: ESC [ <row> ; <col> H  (1-indexed)
-func moveCursor(row, col int) {
+func MoveCursor(row, col int) {
 	if row == 0 || col == 0 {
 		return
 	}
@@ -114,7 +117,7 @@ func moveCursor(row, col int) {
 
 // Write buffer to the terminal
 func Write(buf []byte, row int, col int) {
-	moveCursor(row, col)
+	MoveCursor(row, col)
 	_, _ = os.Stdout.Write(buf)
 }
 

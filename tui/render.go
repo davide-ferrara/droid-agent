@@ -1,10 +1,12 @@
-// package tui render
+// Package tui render
 package tui
 
 import "droid/term"
 
-func Render(buf [][]byte) {
-	for i := range len(buf) {
-		term.Write(buf[i], i+1, 1)
+func Render(screen [][]byte) {
+	term.HideCursor()
+	for i := range len(screen) {
+		term.Write(screen[i], i+1, 1)
 	}
+	term.ShowCursor()
 }

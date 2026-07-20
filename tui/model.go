@@ -12,8 +12,9 @@ const (
 )
 
 type InputLine struct {
-	buf []byte
-	cx  int
+	buf     []byte
+	y       int
+	cursorX int
 }
 
 type Message struct {
@@ -32,12 +33,20 @@ type Model struct {
 	Err       error
 }
 
-func InitModel() Model {
+func (model *Model) refresh() {
+	Render(NewView(*model))
+	model.Input.Update()
+}
+
+func NewModel() Model {
 	cols, rows := term.Size()
+	initLine := InputLine{}
+	initLine.y = rows - 2
 	return Model{
 		TermRows:  rows,
 		TermCols:  cols,
 		Status:    "Droid AI Agent",
+		Input:     initLine,
 		ModelName: "DeepSeek v4 (Pro)",
 		Mode:      ModeIdle,
 	}
