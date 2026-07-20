@@ -11,12 +11,6 @@ const (
 	ModeError
 )
 
-type InputLine struct {
-	buf     []byte
-	y       int
-	cursorX int
-}
-
 type Message struct {
 	Role string // "user" | "assistant" | "system"
 	Text string
@@ -31,11 +25,6 @@ type Model struct {
 	Mode      Mode
 	ModelName string
 	Err       error
-}
-
-func (model *Model) refresh() {
-	Render(NewView(*model))
-	model.Input.Update()
 }
 
 func NewModel() Model {

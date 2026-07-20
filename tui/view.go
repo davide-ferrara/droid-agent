@@ -43,19 +43,19 @@ func statusBarView(model Model) []byte {
 	return buf
 }
 
+func fillLine(n int, fill byte) []byte {
+	return bytes.Repeat([]byte{fill}, n)
+}
+
 func NewView(model Model) [][]byte {
-	statusBar := statusBarView(model)
-	inputLine := inputLineView(model)
-
 	screenBuf := make([][]byte, model.TermRows)
-	for i := range len(screenBuf) {
-		screenBuf[i] = bytes.Repeat([]byte("."), model.TermCols)
+	for i := range screenBuf {
+		screenBuf[i] = fillLine(model.TermCols, '.')
 	}
-	screenBuf[model.TermRows-1] = statusBar
-	if n := model.TermCols - len(inputLine); n > 0 {
-		inputLine = append(inputLine, bytes.Repeat([]byte(" "), n)...)
-	}
-	screenBuf[model.Input.y] = inputLine
+	screenBuf[model.TermRows-1] = statusBarView(model)
 
+	inputLine := fillLine(model.TermCols, ' ')
+	copy(inputLine, inputLineView(model))
+	screenBuf[model.Input.y] = inputLine
 	return screenBuf
 }
