@@ -41,7 +41,4 @@ them heavy, buggy and too generalized, our must be a feather.
 - Comment important inference code where the model mechanics, cache lifetime,
   memory policy, or API orchestration are not obvious from the local code.
 - Prefer comments beside the implementation over separate design documents.
-- Keep comments instructive and compact:
-  explain why a shape, ordering, cache boundary, or memory choice exists.
-- Keep public APIs narrow. CLI/server code should not know tensor internals.
 - No unreadable variable names like N for Node or M for Model.
