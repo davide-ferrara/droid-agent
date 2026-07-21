@@ -50,17 +50,66 @@ func fillLine(n int, fill byte) []byte {
 }
 
 func NewView(model *Model) [][]byte {
-	screenBuf := make([][]byte, model.TermRows)
+	// Layout needs >=2 rows (input + status) and >=1 col.
+	// Below that, indexing screenBuf[-1] would panic, so return
+	// a single-line notice instead of a full screen.
+	if model.TermRows < 2 || model.TermCols < 1 {
+		return [][]byte{[]byte("terminal too small (need >=2 rows, >=1 col)")}
+	}
+
+	// Reuse model.screen / model.blank / model.inputScratch across
+	// frames. Reallocate only when the terminal has resized (or
+	// first call). This keeps a keystroke allocation-free in the
+	// common case.
+	if cap(model.screen) < model.TermRows || cap(model.blank) < model.TermCols {
+		model.screen = make([][]byte, model.TermRows)
+		model.blank = make([]byte, model.TermCols)
+		model.inputScratch = make([]byte, model.TermCols)
+	} else {
+		model.screen = model.screen[:model.TermRows]
+		model.blank = model.blank[:model.TermCols]
+		model.inputScratch = model.inputScratch[:model.TermCols]
+	}
+
+	// Refill the blank with spaces — cheap, no new alloc. We
+	// share the same backing array across every empty row, safe
+	// because we never mutate blank rows in place.
+	for i := range model.blank {
+		model.blank[i] = ' '
+	}
+
+	screenBuf := model.screen
 	for i := range screenBuf {
-		screenBuf[i] = fillLine(model.TermCols, '.')
+		screenBuf[i] = model.blank
+	}
+
+	// NOTE: Fill the screen with the last messages, maybe they
+	// should belong to the model state so we can implement
+	// scrolling, good enough for now.
+	// With UFT-8 len(text) is not enough since char are of 4
+	// bytes, must use runewidht
+	max := chatAreaRows(model.TermRows)
+	start := 0
+	nMsg := len(model.Messages)
+	if nMsg > max {
+		start = nMsg - max
+	}
+	for i := start; i < nMsg; i++ {
+		// NOTE: In the future it will wrap not be only cutted out
+		clamp := min(model.TermCols, len(model.Messages[i].Text))
+		screenBuf[i-start] = []byte(model.Messages[i].Text[:clamp])
 	}
 
 	screenBuf[statusBarRow(model.TermRows)] = statusBarView(*model)
 
-	row := inputRow(model.TermRows)
-	line := fillLine(model.TermCols, ' ')
-	copy(line, inputView(*model))
-	screenBuf[row] = line
+	// Input row: reuse inputScratch explicitly so we don't alias
+	// the shared blank (the input line is the one row that gets
+	// mutated in place each frame). Refill from blank, then copy
+	// the current input buffer on top.
+	scratch := model.inputScratch
+	copy(scratch, model.blank)
+	copy(scratch, inputView(*model))
+	screenBuf[inputRow(model.TermRows)] = scratch
 
 	return screenBuf
 }

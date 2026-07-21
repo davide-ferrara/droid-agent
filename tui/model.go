@@ -25,6 +25,13 @@ type Model struct {
 	Mode      Mode
 	ModelName string
 	Err       error
+
+	// Persistent render buffers — reused across frames so a
+	// keystroke does not allocate the screen. Reallocated only
+	// when the terminal size changes (see NewView).
+	screen        [][]byte // rows indexed 0..TermRows-1
+	blank         []byte   // one reusable blank row, len == TermCols
+	inputScratch  []byte   // reusable scratch for the input row
 }
 
 func NewModel() Model {

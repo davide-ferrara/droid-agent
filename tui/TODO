@@ -1,0 +1,92 @@
+# tui/ code feedback
+
+## Strengths
+- Tidy, small, idiomatic. Each file has one responsibility, functions
+  stay short. Matches the "feather" goal in AGENTS.md.
+- Good use of stack-allocated fixed buffers (`var fixedBuf [256]byte`
+  in `statusBarView`) and `strconv.AppendInt` instead of `fmt.Sprintf`
+  — respects the no-`Sprintf` rule.
+- Clean `Mode` enum, single `Model`, `Message` shape. Debug helpers
+  neatly isolated in `debug.go`.
+- Layout is described in a comment next to its functions — matches
+  "comments beside implementation" rule.
+- Layout now derived from `inputHeight`/`statusBarHeight` constants,
+  so multi-line input growth is a one-line change.
+
+## Issues / smells
+1. `view.go:55` — `.fillLine` still allocates 3 slices per frame
+   (one `emptyLine` shared + `screenBuf` itself + one input `line`).
+   Better than the old 200/keystroke, but the real fix is the
+   persistent flat buffer (#3 in the priority list).
+2. `render.go:8` — `for i := range len(screen)` writes every row
+   every frame (full repaint). No dirty-region tracking. Fine for
+   now, but worth tracking.
+3. `input.go:63` — resize handler clamps `cursorX` to `cols-1` but
+   does not clamp to current `len(buf)`; cursor can float past
+   content / get stuck off-buf on shrink. Also `cursorY` is never
+   updated for multi-line, despite the comment saying "≥1 for
+   multi-line".
+4. `input.go:54` `renderInput` calls `Render`+`MoveCursor` even when
+   nothing changed. Every keystroke does a full repaint (perf
+   concern from #1/#2).
+5. `input.go:98` `handleCtrl` only handles Ctrl-H/Backspace/Enter/
+   Ctrl-J. Ctrl-C is handled in `HandleInput` as `KindQuit`, Ctrl-D
+   returns via `KindEOF` — neither logs before exit except `KindQuit`
+   prints `"CtrlC"`. Inconsistent.
+6. `view.go:39-41` — status bar appends `cols`x`rows` using `int64`
+   cast on each call; minor, but `strconv.AppendInt(buf, int64(...),
+   10)` on every keystroke is wasteful. Wrap width inside a debug
+   toggle.
+7. `debug.go` `dbgInput`/`dbgModel` always log via `log.Printf` even
+   in release. No build tag or `if debug {}` gate. Clutters logs in
+   production.
+8. `model.go:36` — `ModelName: "DeepSeek v4 (Pro)"` hardcoded; no
+   config injection despite AGENTS.md mentioning swappable offline
+   models (Qwen/DeepSeek). Should come from config.
+9. `input.go:109` — `handleCSI` only handles Left/Right; up/down/
+   Home/End/Delete/PageUp/PageDown are silently logged-and-dropped.
+   At least `Home`/`End` trivial given current `buf`.
+10. `view.go:78` — Truncation is byte-based; UTF-8 multi-byte chars
+    (e.g. Italian accents, emoji) will be cut mid-rune and corrupt
+    the terminal line. Needs `runewidth` / rune-aware truncation.
+
+## Architectural gaps
+- No scrolling / message history navigation (the `start` offset in
+  `NewView` is a stub for this; needs `Model.scroll` + PageUp/PageDN).
+- No streaming output / spinners for `ModeLoading` and
+  `ModeStreaming`.
+- No theming hook (AGENTS.md lists Theming as a goal); ANSI color
+  codes are inlined in `statusBarView`.
+- No tests.
+
+# What to implement right now (priority order)
+
+1. **Screen buffer reuse + dirty repaint** — keep a `[][]byte` on
+   `Model` (and a reusable `blank []byte`), only grow/shrink on
+   resize, reset content rows to `blank` without re-allocating.
+   Removes per-keystroke garbage. Closes issue #1.
+2. **Hardcode removal** — pass `ModelName` and status text in from
+   config/main, not `NewModel`.
+3. **Theming stub** — `type Theme struct{ StatusBarBg, StatusBarFg
+   [3]byte }`, pass into `statusBarView`. Replaces raw
+   `\033[38;2;0;0;0m\033[48;2;0;180;244m` literal.
+4. **`Home`/`End`/`Delete` CSI** in `handleCSI` — trivial given
+   existing cursor logic.
+5. **Debug gating** — `dbgInput`/`dbgModel` behind a build tag
+   (`//go:build debug`) or a `Model.debug bool`. Stops log spam in
+   release.
+6. **Rune-aware truncation** — swap byte slicing in `view.go:78`
+   for a `runewidth`-based wrapper so UTF-8 renders cleanly.
+
+Closed in this pass:
+- Bounds & safety guard in `NewView` (TermRows<2 / TermCols<1) —
+  no more `screenBuf[-1]` panic.
+- `fillLine(..., '.')` debug dots replaced with spaces.
+- `HandleEnter` now appends to `Messages` before clearing `buf`.
+- Content area renders the last `chatAreaRows` messages bottom-up.
+- `[]byte(Text[:clamp])` panic fixed via `min(TermCols, len(Text))`.
+- Shadowed `len` variable renamed to `nMsg`.
+- Layout derived from `inputHeight`/`statusBarHeight` constants via
+  `chatAreaRows` / `inputRow` / `statusBarRow` — ready for
+  multi-line input growth.
+- Empty-input guard on Enter (skips blank sends).

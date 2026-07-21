@@ -42,3 +42,7 @@ them heavy, buggy and too generalized, our must be a feather.
   memory policy, or API orchestration are not obvious from the local code.
 - Prefer comments beside the implementation over separate design documents.
 - No unreadable variable names like N for Node or M for Model.
+- Markdown with max 80 col.
+- Never remove comments.
+- If you change the code don't destroy the original structure, I don't want to lose
+  control of it.

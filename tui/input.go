@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"bytes"
 	"log"
 
 	"droid/term"
@@ -81,6 +82,12 @@ func (m *Model) handleBackspace() {
 }
 
 func (m *Model) handleEnter() {
+	// Check for empty messages, or messages with only spaces.
+	// Opencode allow you to sent messages with only spaces, not here.
+	if len(bytes.TrimSpace(m.Input.buf)) == 0 {
+		return
+	}
+	m.Messages = append(m.Messages, Message{Role: "user", Text: string(m.Input.buf)})
 	m.Input.HandleEnter()
 	m.renderInput()
 }
