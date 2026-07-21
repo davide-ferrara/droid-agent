@@ -12,6 +12,8 @@ func inputLineView(model Model) []byte {
 	return model.Input.buf
 }
 
+// NOTE: if the screen is too zommed in the status bar
+// will mess the input line if occupies more than 1 line
 func statusBarView(model Model) []byte {
 	var fixedBuf [256]byte
 	buf := fixedBuf[:0]
@@ -47,15 +49,16 @@ func fillLine(n int, fill byte) []byte {
 	return bytes.Repeat([]byte{fill}, n)
 }
 
-func NewView(model Model) [][]byte {
+func NewView(model *Model) [][]byte {
 	screenBuf := make([][]byte, model.TermRows)
 	for i := range screenBuf {
 		screenBuf[i] = fillLine(model.TermCols, '.')
 	}
-	screenBuf[model.TermRows-1] = statusBarView(model)
+	screenBuf[model.TermRows-1] = statusBarView(*model)
 
 	inputLine := fillLine(model.TermCols, ' ')
-	copy(inputLine, inputLineView(model))
+	copy(inputLine, inputLineView(*model))
 	screenBuf[model.Input.y] = inputLine
+
 	return screenBuf
 }

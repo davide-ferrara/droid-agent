@@ -9,7 +9,7 @@ import (
 func Run() {
 	reader := bufio.NewReader(os.Stdin)
 	model := NewModel()
-	view := NewView(model)
+	view := NewView(&model)
 	Render(view)
 	HandleInput(reader, &model)
 }

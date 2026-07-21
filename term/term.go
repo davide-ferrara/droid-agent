@@ -122,6 +122,61 @@ func Write(buf []byte, row int, col int) {
 	_, _ = os.Stdout.Write(buf)
 }
 
+// CursorPos queries the terminal for current cursor position via DSR
+// (Device Status Report, ESC[6n). Terminal responds with ESC[row;colR.
+func CursorPos() (row, col int, err error) {
+	_, _ = os.Stdout.Write([]byte("\033[6n"))
+
+	in := os.Stdin
+	var b [1]byte
+	read := func() (byte, error) {
+		_, e := in.Read(b[:])
+		return b[0], e
+	}
+
+	c, err := read()
+	if err != nil {
+		return
+	}
+	if c != 0x1b {
+		err = fmt.Errorf("CursorPos: expected ESC, got %x", c)
+		return
+	}
+
+	c, err = read()
+	if err != nil {
+		return
+	}
+	if c != '[' {
+		err = fmt.Errorf("CursorPos: expected '[', got %x", c)
+		return
+	}
+
+	for {
+		c, err = read()
+		if err != nil {
+			return
+		}
+		if c == ';' {
+			break
+		}
+		row = row*10 + int(c-'0')
+	}
+
+	for {
+		c, err = read()
+		if err != nil {
+			return
+		}
+		if c == 'R' {
+			break
+		}
+		col = col*10 + int(c-'0')
+	}
+
+	return
+}
+
 func enterAltScreen() {
 	_, _ = os.Stdout.Write([]byte(AltScreen))
 }
