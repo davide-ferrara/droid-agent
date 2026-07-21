@@ -8,10 +8,10 @@ import (
 )
 
 type Input struct {
-	buf     []byte
-	x       int
-	cursorX int
-	cursorY int
+	buf     []byte // user input text, raw bytes
+	x       int    // screen column where the input line starts (0 = left edge)
+	cursorX int    // horizontal offset of the cursor within buf (0 = before first char)
+	cursorY int    // vertical offset of the cursor within the input area (0 = input line, ≥1 for multi-line)
 }
 
 func (in *Input) MoveCursorTo(row int) {
