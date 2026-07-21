@@ -55,16 +55,32 @@ func (in *Input) HandleLine(ch byte) {
 	dbgInput(in)
 }
 
+func renderInput(m *Model) {
+	Render(NewView(m))
+	m.Input.MoveCursorTo(inputRow(m.TermRows))
+}
+
+func (m *Model) handleInput(ch byte) {
+	m.Input.HandleLine(ch)
+	renderInput(m)
+}
+
+func (m *Model) handleBackspace() {
+	m.Input.HandleBackspace()
+	renderInput(m)
+}
+
+func (m *Model) handleEnter() {
+	m.Input.HandleEnter()
+	renderInput(m)
+}
+
 func handleCtrl(model *Model, key byte) {
 	switch key {
 	case term.CtrlH, term.Backspace:
-		model.Input.HandleBackspace()
-		Render(NewView(model))
-		model.Input.MoveCursorTo(inputRow(model.TermRows))
+		model.handleBackspace()
 	case term.Enter, term.CtrlJ:
-		model.Input.HandleEnter()
-		Render(NewView(model))
-		model.Input.MoveCursorTo(inputRow(model.TermRows))
+		model.handleEnter()
 	default:
 		log.Printf("Unhandled: %x", key)
 	}
@@ -86,13 +102,11 @@ func handleCSI(sequence string) {
 }
 
 func HandleInput(reader *bufio.Reader, model *Model) {
-	model.Input.MoveCursorTo(inputRow(model.TermRows))
 	for {
 		ev := term.ReadKey(reader)
 
 		if pollResize(model) {
-			Render(NewView(model))
-			model.Input.MoveCursorTo(inputRow(model.TermRows))
+			renderInput(model)
 			continue
 		}
 
@@ -103,9 +117,7 @@ func HandleInput(reader *bufio.Reader, model *Model) {
 			log.Println("CtrlC")
 			return
 		case term.KindPrintable:
-			model.Input.HandleLine(ev.Byte)
-			Render(NewView(model))
-			model.Input.MoveCursorTo(inputRow(model.TermRows))
+			model.handleInput(ev.Byte)
 		case term.KindCtrl:
 			handleCtrl(model, ev.Byte)
 		case term.KindCSI:
