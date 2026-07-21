@@ -54,11 +54,13 @@ func NewView(model *Model) [][]byte {
 	for i := range screenBuf {
 		screenBuf[i] = fillLine(model.TermCols, '.')
 	}
-	screenBuf[model.TermRows-1] = statusBarView(*model)
 
+	screenBuf[statusBarRow(model.TermRows)] = statusBarView(*model)
+
+	inputRow := inputLineRow(model.TermRows)
 	inputLine := fillLine(model.TermCols, ' ')
 	copy(inputLine, inputLineView(*model))
-	screenBuf[model.Input.y] = inputLine
+	screenBuf[inputRow] = inputLine
 
 	return screenBuf
 }

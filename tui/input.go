@@ -7,24 +7,23 @@ import (
 	"droid/term"
 )
 
-// NOTE: Dont remove the unused for now
 type InputLine struct {
 	buf     []byte
-	y       int
 	x       int
 	cursorX int
 	cursorY int
 }
 
-func (line *InputLine) Update() {
-	term.MoveCursor(line.y+line.cursorY+1, line.x+line.cursorX+1)
+// MoveCursorTo positions the terminal cursor at the input line.
+// inputLineRow is 0-indexed; +1 converts to 1-indexed for the terminal.
+func (line *InputLine) MoveCursorTo(inputLineRow int) {
+	term.MoveCursor(inputLineRow+line.cursorY+1, line.x+line.cursorX+1)
 }
 
 func pollResize(model *Model) bool {
 	cols, rows := term.Size()
 	if cols != model.TermCols || rows != model.TermRows {
 		model.TermCols, model.TermRows = cols, rows
-		model.Input.y = rows - 2
 		if model.Input.cursorX >= cols && cols > 0 {
 			model.Input.cursorX = cols - 1
 		}
@@ -41,7 +40,6 @@ func (line *InputLine) HandleBackspace() {
 	}
 	line.buf = append(line.buf[:line.cursorX-1], line.buf[line.cursorX:]...)
 	line.cursorX--
-	line.Update()
 	dbgLine(line)
 }
 
@@ -54,7 +52,6 @@ func (line *InputLine) HandleEnter() {
 func (line *InputLine) HandleLine(ch byte) {
 	line.buf = append(line.buf, ch)
 	line.cursorX++
-	line.Update()
 	dbgLine(line)
 }
 
@@ -63,11 +60,11 @@ func handleCtrl(model *Model, key byte) {
 	case term.CtrlH, term.Backspace:
 		model.Input.HandleBackspace()
 		Render(NewView(model))
-		model.Input.Update()
+		model.Input.MoveCursorTo(inputLineRow(model.TermRows))
 	case term.Enter, term.CtrlJ:
 		model.Input.HandleEnter()
 		Render(NewView(model))
-		model.Input.Update()
+		model.Input.MoveCursorTo(inputLineRow(model.TermRows))
 	default:
 		log.Printf("Unhandled: %x", key)
 	}
@@ -89,13 +86,13 @@ func handleCSI(sequence string) {
 }
 
 func HandleInput(reader *bufio.Reader, model *Model) {
-	model.Input.Update()
+	model.Input.MoveCursorTo(inputLineRow(model.TermRows))
 	for {
 		ev := term.ReadKey(reader)
 
 		if pollResize(model) {
 			Render(NewView(model))
-			model.Input.Update()
+			model.Input.MoveCursorTo(inputLineRow(model.TermRows))
 			continue
 		}
 
@@ -108,7 +105,7 @@ func HandleInput(reader *bufio.Reader, model *Model) {
 		case term.KindPrintable:
 			model.Input.HandleLine(ev.Byte)
 			Render(NewView(model))
-			model.Input.Update()
+			model.Input.MoveCursorTo(inputLineRow(model.TermRows))
 		case term.KindCtrl:
 			handleCtrl(model, ev.Byte)
 		case term.KindCSI:
