@@ -39,6 +39,18 @@ func (in *Input) HandleLine(ch byte) {
 	dbgInput(in)
 }
 
+func (in *Input) HandleLeft() {
+	if in.cursorX > 0 {
+		in.cursorX--
+	}
+}
+
+func (in *Input) HandleRight() {
+	if in.cursorX < len(in.buf) {
+		in.cursorX++
+	}
+}
+
 func (m *Model) renderInput() {
 	Render(NewView(m))
 	m.Input.MoveCursorTo(inputRow(m.TermRows))
@@ -73,6 +85,16 @@ func (m *Model) handleEnter() {
 	m.renderInput()
 }
 
+func (m *Model) handleLeft() {
+	m.Input.HandleLeft()
+	m.renderInput()
+}
+
+func (m *Model) handleRight() {
+	m.Input.HandleRight()
+	m.renderInput()
+}
+
 func (m *Model) handleCtrl(key byte) {
 	switch key {
 	case term.CtrlH, term.Backspace:
@@ -84,18 +106,14 @@ func (m *Model) handleCtrl(key byte) {
 	}
 }
 
-func handleCSI(sequence string) {
-	switch sequence {
-	case term.Up:
-		log.Println("Key Up")
-	case term.Down:
-		log.Println("Key Down")
+func (m *Model) handleCSI(seq string) {
+	switch seq {
 	case term.Right:
-		log.Println("Key Right")
+		m.handleRight()
 	case term.Left:
-		log.Println("Key Left")
+		m.handleLeft()
 	default:
-		log.Println("Seq INOP")
+		log.Printf("CSI unhandled: %s", seq)
 	}
 }
 
@@ -119,7 +137,7 @@ func HandleInput(reader *bufio.Reader, model *Model) {
 		case term.KindCtrl:
 			model.handleCtrl(ev.Byte)
 		case term.KindCSI:
-			handleCSI(ev.Seq)
+			model.handleCSI(ev.Seq)
 		}
 	}
 }
