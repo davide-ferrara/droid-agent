@@ -118,6 +118,7 @@ func (m *Model) handleCSI(seq string) {
 }
 
 func HandleInput(reader *bufio.Reader, model *Model) {
+	model.renderInput()
 	for {
 		ev := term.ReadKey(reader)
 
