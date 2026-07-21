@@ -122,37 +122,83 @@ func fillBlanks(model *Model) {
 	}
 }
 
-// clampScroll keeps model.Scroll inside [0, max(0, nMsg-chatAreaRows)]
-// so a resize, deletion, or new message never leaves a blank
-// viewport. Returns the clamped value and the last visible index.
-func clampScroll(model *Model) (start, end int) {
+// maxScroll returns the largest valid value for Model.Scroll —
+// the smallest index i such that the display rows of messages
+// [i..nMsg) fit in chatAreaRows. Edge case: when even the latest
+// message alone doesn't fit, it returns nMsg-1 so messagesToBuf
+// still renders its bottom rows (top rows scroll out).
+//
+// Shared by clampScroll (resets Scroll past the end to anchor
+// the bottom) and pageDownShift (clamps a forward-page step).
+func maxScroll(model *Model) int {
 	maxRows := chatAreaRows(model)
 	nMsg := len(model.Messages)
+	rowsUsed := 0
+	i := nMsg
+	for i > 0 {
+		mr := messageRows(model.Messages[i-1].Text, model.TermCols)
+		if rowsUsed+mr > maxRows {
+			break
+		}
+		rowsUsed += mr
+		i--
+	}
+	if i == nMsg && nMsg > 0 {
+		i = nMsg - 1
+	}
+	return i
+}
+
+// clampScroll keeps model.Scroll inside [0, maxScroll]. A Scroll
+// past maxScroll (e.g. set to len(Messages) by handleEnter) snaps
+// down so the newest message is anchored at the bottom.
+//
+// Returns the clamped start and end (end always == nMsg; the
+// caller iterates messages forward and stops when the chat area
+// is full).
+func clampScroll(model *Model) (start, end int) {
+	nMsg := len(model.Messages)
+	if nMsg == 0 {
+		model.Scroll = 0
+		return 0, 0
+	}
+	ms := maxScroll(model)
 	if model.Scroll < 0 {
 		model.Scroll = 0
 	}
-	if max := nMsg - maxRows; model.Scroll > max {
-		model.Scroll = max
-		if model.Scroll < 0 {
-			model.Scroll = 0
-		}
+	if model.Scroll > ms {
+		model.Scroll = ms
 	}
-	end = model.Scroll + maxRows
-	if end > nMsg {
-		end = nMsg
-	}
-	return model.Scroll, end
+	return model.Scroll, nMsg
 }
 
-// messagesToBuf writes the visible slice of model.Messages into
-// the chat area of screen. Each row is rune-aware-truncated to
-// TermCols; NOTE: this will wrap once soft-wrap lands.
+// messagesToBuf writes the visible messages into the chat area of
+// screen, wrapping each message into display rows via wrapMessage.
+// Walks forward from Scroll, writing wrapped rows until either
+// the messages run out or the chat area is full. Single messages
+// taller than the viewport are truncated at the top by ScreenIdx
+// so the latest rows of that message remain visible (rare case;
+// keeps the bottom anchored).
 func messagesToBuf(model *Model, screen [][]byte) {
 	start, end := clampScroll(model)
-	for i := start; i < end; i++ {
-		// NOTE: In the future it will wrap not be only cutted out
-		endByte, _ := truncateToCols(model.Messages[i].Text, model.TermCols)
-		screen[i-start] = []byte(model.Messages[i].Text[:endByte])
+	maxRows := chatAreaRows(model)
+	cols := model.TermCols
+	screenIdx := 0
+	for i := start; i < end && screenIdx < maxRows; i++ {
+		rows := wrapMessage(model.Messages[i].Text, cols)
+		// If a single message doesn't fit, drop its leading rows
+		// so the bottom-of-message stays visible.
+		skip := 0
+		if len(rows) > maxRows-screenIdx {
+			skip = len(rows) - (maxRows - screenIdx)
+		}
+		for _, r := range rows[skip:] {
+			if screenIdx >= maxRows {
+				return
+			}
+			screen[screenIdx] = r
+			screenIdx++
+		}
 	}
 }
 

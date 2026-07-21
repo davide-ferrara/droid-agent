@@ -248,11 +248,11 @@ func (m *Model) handleEnter() {
 		return
 	}
 	m.Messages = append(m.Messages, Message{Role: "user", Text: string(m.Input.buf)})
-	// Snap to latest so the new message is immediately visible.
-	m.Scroll = len(m.Messages) - chatAreaRows(m)
-	if m.Scroll < 0 {
-		m.Scroll = 0
-	}
+	// Snap to latest: set Scroll past the end so the next
+	// clampScroll run (inside messagesToBuf via renderFrame)
+	// recomputes maxScroll by backward-fill and pins the
+	// newest message at the bottom.
+	m.Scroll = len(m.Messages)
 	// NewView shifts messages up via the start offset when the
 	// list overflows the chat area, so the whole column may have
 	// changed — mark every chat row dirty.
@@ -298,11 +298,16 @@ func (m *Model) handleCtrl(key byte) {
 	}
 }
 
-// pageUpShift / pageDownShift scroll the chat area by one
-// viewport, clamped to [0, max(0, nMsg-chatAreaRows)].
+// pageUpShift / pageDownShift scroll the chat area by chatAreaRows
+// counted in DISPLAY rows (not message indices). Scrolling by 1
+// message index would jump the wrong amount when a wrapped
+// message spans multiple rows, so we walk the message list
+// forward (down) or backward (up) skipping whole messages until
+// we've consumed chatAreaRows display rows. Clamp at [0, maxScroll]
+// where maxScroll is computed by clampScroll's backward-fill.
 func (m *Model) pageUpShift() {
-	maxRows := chatAreaRows(m)
-	m.Scroll -= maxRows
+	target := chatAreaRows(m)
+	m.Scroll -= target
 	if m.Scroll < 0 {
 		m.Scroll = 0
 	}
@@ -311,14 +316,10 @@ func (m *Model) pageUpShift() {
 }
 
 func (m *Model) pageDownShift() {
-	maxRows := chatAreaRows(m)
-	max := len(m.Messages) - maxRows
-	if max < 0 {
-		max = 0
-	}
-	m.Scroll += maxRows
-	if m.Scroll > max {
-		m.Scroll = max
+	ms := maxScroll(m)
+	m.Scroll += chatAreaRows(m)
+	if m.Scroll > ms {
+		m.Scroll = ms
 	}
 	m.markChatRowsDirty()
 	m.renderFrame()

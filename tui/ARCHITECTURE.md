@@ -49,17 +49,20 @@ ReadKey ─▶ HandleKeyPress ─▶ Input/Model mutation ─▶ NewView
   cached cursorY/cursorCol), handlers (`HandleLine` takes a
   rune), the resize poll, the input loop dispatcher.
 - `view.go` — `NewView` orchestrator + helpers (`sizeOK`,
-  `reallocScreenBufs`, `fillBlanks`, `clampScroll`,
-  `messagesToBuf`, `statusBarToBuf`, `inputLineToBuf`,
-  `statusBarView`, `fillLine`).
+  `reallocScreenBufs`, `fillBlanks`, `maxScroll`,
+  `clampScroll`, `messagesToBuf` (wraps), `statusBarToBuf`,
+  `inputLineToBuf` (wraps), `statusBarView`, `fillLine`).
 - `render.go` — `Render(screen, dirty, statusRow)` flushes to
   the terminal, applies `ESC[K` after each row except the
   status row.
-- `width.go` — `runeWidth` (delegates to `go-runewidth`),
-  `truncateToCols` (rune-aware byte-offset truncation for
-  messages), and `wrapRow` which walks runes summing display
-  widths to derive the (row, col) of any cursor index inside
-  a wrapped input buffer.
+- `width.go` — three width primitives:
+  `runeWidth` (delegates to `go-runewidth`),
+  `wrapRow(buf, idx, cols)` (cursor position inside a wrapped
+  input buffer, with virtual-cursor rule),
+  `wrapMessage(text, cols)` + `messageRows(text, cols)` (split
+  a chat message into display rows, no virtual cursor), and
+  `truncateToCols` (legacy byte-offset truncation kept for
+  callers that want a single short row instead of a wrap).
 - `debug.go` / `release.go` — `//go:build debug` split; the
   release build pulls no `log` import, the debug build ships
   `dbgInput` / `dbgModel` trace logging.
@@ -100,14 +103,46 @@ because `inputHeight` can change any time `buf` grows past a
 wrap. The dirty mask starts fully set right after a full realloc
 so the first paint covers the whole screen.
 
-## Truncation
+## Wrapping (input + messages)
 
-`messagesToBuf` uses `truncateToCols(Text, TermCols)` and slices
-the message by the returned byte offset. The walk is rune-aware:
-Italian accents and emoji never get cut mid-rune, and a wide
-rune that doesn't fit is dropped wholesale rather than split. The
-width math delegates to `mattn/go-runewidth` so ZWJ sequences,
-regional indicators, and CJK terminal detection are correct.
+Both the input line and chat messages wrap via the same width
+math (runeWidth sums):
+
+- `wrapRow(buf []rune, idx, cols)` walks runes [0, idx) and
+  returns the (row, col) where the cursor sits. It applies the
+  virtual-cursor rule: a fully-filled row's cursor visually
+  wraps to (row+1, col 0). Used by `Input.syncCursor` and
+  `inputHeight`.
+- `wrapMessage(text string, cols)` splits a message into its
+  display rows, WITHOUT the virtual-cursor rule (a message has
+  no cursor to blink). Returns the byte content of each row.
+  Used by `messagesToBuf` to fill the chat area.
+- `messageRows(text, cols)` returns only the count, used by
+  `maxScroll`'s backward-fill.
+
+Wide runes that don't fit at the end of a row wrap to the next,
+leaving a trailing blank gap on the previous row (padded with
+spaces in the scratch so the gap is visually correct).
+Combining marks (runeWidth 0) append their UTF-8 bytes after the
+base rune without advancing the column — the terminal overlays
+them on the same cell.
+
+## Scrolling
+
+`Model.Scroll` is the index of the first visible message. With
+wrapping, a message can span multiple display rows, so the upper
+bound for Scroll is computed by backward-fill: walk from the last
+message accumulating `messageRows` until `chatAreaRows` is hit.
+That gives `maxScroll` — the smallest index whose tail fits.
+`handleEnter` sets `Scroll = len(Messages)` and lets
+`clampScroll` snap it down to `maxScroll`, anchoring the newest
+message at the bottom. `pageUpShift` / `pageDownShift` shift
+`Scroll` by `chatAreaRows` indices and clamp the same way.
+
+Edge case: when even the latest message alone is taller than the
+chat area, `maxScroll = nMsg - 1` so the message still shows
+(its leading rows scroll out, keeping the bottom rows visible —
+typical TUI chat behavior).
 
 ## Debug gating
 
@@ -174,15 +209,20 @@ caught without re-running the pty harness.
   `[]rune`, `HandleLine` takes a rune, and `wrapRow` sums
   display widths to derive `(row, col)` so wide runes (CJK,
   emoji) and combining marks compose correctly inside the wrap.
+- Message wrapping: long messages flow across multiple chat
+  rows instead of being hard-truncated at the right edge; the
+  chat area renders wrapped rows forward from `Scroll`.
 
 # Cons / known limits
 
 - No Up/Down CSI handlers — the cursor can only move within a
   wrapped row via Left/Right. Vertical navigation across wrapped
   rows is the next gap.
-- Message rows still hard-truncate at `TermCols` via
-  `truncateToCols`. Long messages do not wrap onto the next chat
-  row; that's the other half of soft-wrap.
+- PageUp / PageDown shift `Scroll` by `chatAreaRows` indices,
+  not by display rows; the jump size is approximate when
+  wrapped messages dominate the viewport. Could be reworked to
+  walk backward by `chatAreaRows` display rows if precision
+  matters.
 - No streaming output / spinners for `ModeLoading` and
   `ModeStreaming`. The modes exist but the visual does not.
 - No theming hook. ANSI color codes are inlined in
@@ -211,27 +251,22 @@ caught without re-running the pty harness.
    wrap math, wire `handleCSI` cases for `term.Up` / `term.Down`
    so the cursor moves by one wrapped row at a time, snapping to
    the start or end of the destination row as appropriate.
-2. **Message wrapping**
-   `messagesToBuf` today hard-truncates each message to
-   `TermCols`; long messages disappear off the right edge. Make
-   it wrap vertically so a single message can occupy multiple
-   chat rows. `chatAreaRows` then needs to count *displayed*
-   rows, not message indices.
-3. **Goroutines for input / render / agent**
+2. **Goroutines for input / render / agent**
    Today the input loop is a blocking `for { term.ReadKey }`.
    Split into three: one reads keys, one renders frames, one
    will talk to the model. They communicate over channels; the
    render goroutine owns `Model` to avoid races. Unblocks
    streaming output later.
-4. **Theming stub**
+3. **Theming stub**
    `type Theme struct{ StatusBarBg, StatusBarFg [3]byte }` (and
    friends), passed into `statusBarView`. Removes the raw
    `\033[38;2;0;0;0m\033[48;2;0;180;244m` literals. Start
    hardcoded — no config file yet.
-5. **Tests — extend to integration level**
-   `wrapRow`, `truncateToCols`, `inputHeight`, `inputRow`,
-   `chatAreaRows`, `HandleLine` / `HandleBackspace` /
-   `HandleLeft` / `HandleRight` / `HandleEnter`, and
+4. **Tests — extend to integration level**
+   `wrapRow`, `wrapMessage`, `messageRows`, `truncateToCols`,
+   `inputHeight`, `inputRow`, `chatAreaRows`, `maxScroll`,
+   `HandleLine` / `HandleBackspace` / `HandleLeft` /
+   `HandleRight` / `HandleEnter`, `messagesToBuf`, and
    `inputLineToBuf` are all covered by unit tests encoding the
    pty smoke scenarios as named cases. Next gap: a fake
    `term` reader interface so `HandleKeyPress`-level tests can
