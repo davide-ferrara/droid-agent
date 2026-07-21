@@ -63,7 +63,6 @@ func wrapRow(buf []rune, idx int, cols int) (row, col int) {
 		idx = len(buf)
 	}
 	row, col = 0, 0
-	lastSpace := -1
 	rowStart := 0
 	for i := 0; i < idx; i++ {
 		r := buf[i]
@@ -76,31 +75,55 @@ func wrapRow(buf []rune, idx int, cols int) (row, col int) {
 				row++
 				rowStart = i + 1
 				col = 0
-				lastSpace = -1
 				continue
 			}
-			lastSpace = i
 			col++
 			continue
 		}
 		if col+w > cols {
-			if lastSpace >= rowStart {
+			// Scan backward from i-1 to rowStart for a space.
+			spaceAt := -1
+			for j := i - 1; j >= rowStart; j-- {
+				if buf[j] == ' ' {
+					spaceAt = j
+					break
+				}
+			}
+			if spaceAt >= 0 {
 				row++
-				rowStart = lastSpace + 1
+				rowStart = spaceAt + 1
 				col = 0
 				for j := rowStart; j <= i; j++ {
 					col += runeWidth(buf[j])
 				}
-				lastSpace = -1
 				continue
 			}
 			row++
 			rowStart = i
 			col = w
-			lastSpace = -1
 			continue
 		}
 		col += w
+		if col == cols && r != ' ' {
+			// Exact fill: scan backward for a space and move the
+			// trailing word to the next row. r is never a space
+			// here (caught above), so start at i-1.
+			spaceAt := -1
+			for j := i - 1; j >= rowStart; j-- {
+				if buf[j] == ' ' {
+					spaceAt = j
+					break
+				}
+			}
+			if spaceAt >= 0 {
+				row++
+				rowStart = spaceAt + 1
+				col = 0
+				for j := rowStart; j <= i; j++ {
+					col += runeWidth(buf[j])
+				}
+			}
+		}
 	}
 	if col == cols {
 		row++

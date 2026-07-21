@@ -163,6 +163,7 @@ func NewModel() Model {
 		{Role: "user", Text: "padding 87"},
 		{Role: "assistant", Text: "padding 88"},
 	}
+	m.Scroll = len(m.Messages) // start at the last page
 	return m
 }
 

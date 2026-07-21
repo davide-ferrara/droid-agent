@@ -278,37 +278,39 @@ func TestHandleRune_AnchoredScrollFollowsInputGrowth(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		m.Messages = append(m.Messages, Message{Text: string(repeatRune('a', cols))})
 	}
-	// Empty input: inputHeight=1, chatAreaRows=22, maxScroll=3
-	// (messages [3..25) = 22 rows, exactly fits).
+	// +1 separator per message → 2 rows each.
+	// Empty input: inputHeight=1, chatAreaRows=21, maxScroll=15
+	// (messages [15..25) = 10×2 = 20 rows, next +2=22 > 21).
 	m.Scroll = maxScroll(&m)
-	if m.Scroll != 3 {
-		t.Fatalf("setup: Scroll=%d want 3", m.Scroll)
+	if m.Scroll != 15 {
+		t.Fatalf("setup: Scroll=%d want 15", m.Scroll)
 	}
 
-	// Type 80 a's: inputHeight grows from 1 to 2 (80 a's fill
-	// row 0, cursor at virtual row 1 col 0). chatAreaRows shrinks
-	// from 22 to 21, maxScroll goes from 3 to 4.
+	// Type 80 a's: inputHeight grows from 1 to 2. chatAreaRows
+	// shrinks from 21 to 20, maxScroll stays 15
+	// (10 messages × 2 = 20 rows, next +2=22 > 20).
 	for i := 0; i < 80; i++ {
 		m.handleRune('a')
 	}
-	if m.Scroll != 4 {
-		t.Errorf("after 80 a's (1->2 rows): Scroll=%d want 4", m.Scroll)
+	if m.Scroll != 15 {
+		t.Errorf("after 80 a's (1->2 rows): Scroll=%d want 15", m.Scroll)
 	}
 
 	// Type 79 more a's (total 159): inputHeight stays 2 so Scroll
-	// should remain at 4 (no re-anchor needed).
+	// should remain at 15 (no re-anchor needed).
 	for i := 0; i < 79; i++ {
 		m.handleRune('a')
 	}
-	if m.Scroll != 4 {
-		t.Errorf("after 159 a's (same 2 rows): Scroll=%d want 4", m.Scroll)
+	if m.Scroll != 15 {
+		t.Errorf("after 159 a's (same 2 rows): Scroll=%d want 15", m.Scroll)
 	}
 
 	// Type the 160th 'a': triggers inputHeight 2→3 (2 full rows,
-	// cursor at virtual row 2 col 0). maxScroll goes from 4 to 5.
+	// cursor at virtual row 2 col 0). chatAreaRows=19, maxScroll
+	// goes to 16 (9 messages × 2 = 18 rows, next +2=20 > 19).
 	m.handleRune('a')
-	if m.Scroll != 5 {
-		t.Errorf("after 160 a's (2->3 rows): Scroll=%d want 5", m.Scroll)
+	if m.Scroll != 16 {
+		t.Errorf("after 160 a's (2->3 rows): Scroll=%d want 16", m.Scroll)
 	}
 }
 
@@ -321,28 +323,28 @@ func TestBackspace_AnchoredScrollPreserved(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		m.Messages = append(m.Messages, Message{Text: string(repeatRune('a', cols))})
 	}
-	// Type 81 a's so that one backspace stays at inputHeight=2:
-	// 81 a's = row 0 full (80) + 1 on row 1, inputHeight=2.
+	// +1 separator per message → 2 rows each.
+	// Type 81 a's: inputHeight=2, chatAreaRows=20, maxScroll=15.
 	for i := 0; i < 81; i++ {
 		m.Input.HandleLine('a', cols)
 	}
 	m.Scroll = maxScroll(&m)
-	if m.Scroll != 4 {
-		t.Fatalf("setup: Scroll=%d want 4", m.Scroll)
+	if m.Scroll != 15 {
+		t.Fatalf("setup: Scroll=%d want 15", m.Scroll)
 	}
 
 	// Backspace 1 → 80 a's: inputHeight still 2 (same wrapped
-	// rows). Scroll stays 4.
+	// rows). Scroll stays 15.
 	m.handleBackspace()
-	if m.Scroll != 4 {
-		t.Errorf("after 1 BS (still 2 rows): Scroll=%d want 4", m.Scroll)
+	if m.Scroll != 15 {
+		t.Errorf("after 1 BS (still 2 rows): Scroll=%d want 15", m.Scroll)
 	}
 
 	// Backspace 1 more → 79 a's: inputHeight drops to 1
-	// (cursor retreats to row 0). Scroll clamps to new maxScroll=3.
+	// (cursor retreats to row 0). Scroll clamps to new maxScroll=15.
 	m.handleBackspace()
-	if m.Scroll != 3 {
-		t.Errorf("after 2 BS (2->1 rows): Scroll=%d want 3", m.Scroll)
+	if m.Scroll != 15 {
+		t.Errorf("after 2 BS (2->1 rows): Scroll=%d want 15", m.Scroll)
 	}
 }
 

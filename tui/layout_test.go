@@ -119,11 +119,11 @@ func TestInputRow_PinsToBottomMinusHeight(t *testing.T) {
 		buf  string
 		want int
 	}{
-		{"", rows - 2},                          // 1 input row
-		{string(repeatRune('a', 79)), rows - 2},  // 1 input row (cursor col 79)
-		{string(repeatRune('a', 80)), rows - 3},  // 2 input rows (cursor wrap)
-		{string(repeatRune('a', 81)), rows - 3},  // 2 input rows
-		{string(repeatRune('a', 200)), rows - 4}, // 3 input rows
+		{"", rows - 3},                          // 1 input row, 1 gap row
+		{string(repeatRune('a', 79)), rows - 3},  // 1 input row
+		{string(repeatRune('a', 80)), rows - 4},  // 2 input rows
+		{string(repeatRune('a', 81)), rows - 4},  // 2 input rows
+		{string(repeatRune('a', 200)), rows - 5}, // 3 input rows
 	}
 	for _, c := range checks {
 		m := newModelWithInput(c.buf, cols, rows)
@@ -137,25 +137,25 @@ func TestInputRow_PinsToBottomMinusHeight(t *testing.T) {
 // yields rows back to the input area as the buffer wraps.
 func TestChatAreaRows_ShrinksOnInputGrowth(t *testing.T) {
 	cols, rows := 80, 24
-	// Empty input → chat takes 22, status 1, input 1.
+	// Empty input → chat takes 21, gap 1, status 1, input 1.
 	m := newModelWithInput("", cols, rows)
-	if got := chatAreaRows(&m); got != rows-2 {
-		t.Errorf("empty: got %d want %d", got, rows-2)
-	}
-	// 79 a's → still 1 input row, chat still 22.
-	m = newModelWithInput(string(repeatRune('a', 79)), cols, rows)
-	if got := chatAreaRows(&m); got != rows-2 {
-		t.Errorf("79 a's: got %d want %d", got, rows-2)
-	}
-	// 80 a's → 2 input rows (cursor wrap) → chat 21.
-	m = newModelWithInput(string(repeatRune('a', 80)), cols, rows)
 	if got := chatAreaRows(&m); got != rows-3 {
-		t.Errorf("80 a's: got %d want %d", got, rows-3)
+		t.Errorf("empty: got %d want %d", got, rows-3)
 	}
-	// 200 a's → 3 input rows → chat 20.
-	m = newModelWithInput(string(repeatRune('a', 200)), cols, rows)
+	// 79 a's → still 1 input row, chat still 21.
+	m = newModelWithInput(string(repeatRune('a', 79)), cols, rows)
+	if got := chatAreaRows(&m); got != rows-3 {
+		t.Errorf("79 a's: got %d want %d", got, rows-3)
+	}
+	// 80 a's → 2 input rows → chat 20.
+	m = newModelWithInput(string(repeatRune('a', 80)), cols, rows)
 	if got := chatAreaRows(&m); got != rows-4 {
-		t.Errorf("200 a's: got %d want %d", got, rows-4)
+		t.Errorf("80 a's: got %d want %d", got, rows-4)
+	}
+	// 200 a's → 3 input rows → chat 19.
+	m = newModelWithInput(string(repeatRune('a', 200)), cols, rows)
+	if got := chatAreaRows(&m); got != rows-5 {
+		t.Errorf("200 a's: got %d want %d", got, rows-5)
 	}
 }
 

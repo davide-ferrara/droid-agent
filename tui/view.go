@@ -136,7 +136,7 @@ func maxScroll(model *Model) int {
 	rowsUsed := 0
 	i := nMsg
 	for i > 0 {
-		mr := messageRows(model.Messages[i-1].Text, model.TermCols)
+		mr := messageRows(model.Messages[i-1].Text, model.TermCols) + 1 // +1 for blank separator
 		if rowsUsed+mr > maxRows {
 			break
 		}
@@ -192,11 +192,26 @@ func messagesToBuf(model *Model, screen [][]byte) {
 		if len(rows) > maxRows-screenIdx {
 			skip = len(rows) - (maxRows - screenIdx)
 		}
+		isUser := model.Messages[i].Role == "user"
 		for _, r := range rows[skip:] {
 			if screenIdx >= maxRows {
 				return
 			}
-			screen[screenIdx] = r
+			if isUser {
+				styled := make([]byte, 0, len(r)+20)
+				styled = append(styled, "\033[48;2;42;42;46m"...)
+				styled = append(styled, r...)
+				styled = append(styled, term.ClearLine...)
+				styled = append(styled, "\033[0m"...)
+				screen[screenIdx] = styled
+			} else {
+				screen[screenIdx] = r
+			}
+			screenIdx++
+		}
+		// Blank separator between messages (fillBlanks already
+		// filled every row with spaces; we just skip one).
+		if screenIdx < maxRows {
 			screenIdx++
 		}
 	}
@@ -295,6 +310,23 @@ func inputLineToBuf(model *Model, screen [][]byte) {
 		}
 		scratches[row] = utf8.AppendRune(scratches[row], r)
 		col += w
+		if col == cols && r != ' ' {
+			// Exact fill: scan backward for a space and move
+			// the trailing word to the next row.
+			s := scratches[row]
+			if lastSpace := bytes.LastIndexByte(s, ' '); lastSpace >= 0 {
+				tail := s[lastSpace+1:]
+				scratches[row] = s[:lastSpace]
+				row++
+				col = 0
+				if row < len(scratches) {
+					scratches[row] = append(scratches[row], tail...)
+				}
+				for _, tr := range []rune(string(tail)) {
+					col += runeWidth(tr)
+				}
+			}
+		}
 	}
 	for i := range scratches {
 		screen[top+i] = scratches[i]

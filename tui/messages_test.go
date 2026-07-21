@@ -116,7 +116,7 @@ func TestClampScroll_BackwardFill(t *testing.T) {
 	cols := 80
 	// Build a model with 4 messages: 1-row, 3-row (240 a's), 1-row, 1-row.
 	// chatAreaRows = 24 - 1 (status) - 1 (input) = 22.
-	// Total display rows = 1+3+1+1 = 6. Fits in 22, so maxScroll = 0.
+	// With 1-row separators: 2+4+2+2 = 10. Fits in 22, so maxScroll = 0.
 	m := Model{
 		TermRows: 24, TermCols: cols,
 		Messages: []Message{
@@ -143,9 +143,10 @@ func TestClampScroll_BackwardFill(t *testing.T) {
 func TestClampScroll_BackwardFillOverflow(t *testing.T) {
 	cols := 80
 	// 30 messages of 80 a's = 30 rows. Chat is 22 rows. Backward
-	// walk: 22 rows = messages [8..30). maxScroll = 8.
+	// +1 separator per message → 2 rows each. 21 chat rows =
+	// 10 messages: [20..30). maxScroll = 20.
 	m := Model{
-		TermRows: 24, TermCols: cols, // chat = 22
+		TermRows: 24, TermCols: cols, // chat = 24-1-1-1 = 21
 		Messages: make([]Message, 30),
 	}
 	for i := range m.Messages {
@@ -153,8 +154,8 @@ func TestClampScroll_BackwardFillOverflow(t *testing.T) {
 	}
 	m.Scroll = 999 // past end
 	start, end := clampScroll(&m)
-	if start != 8 || end != 30 {
-		t.Errorf("got start=%d end=%d want 8/30", start, end)
+	if start != 20 || end != 30 {
+		t.Errorf("got start=%d end=%d want 20/30", start, end)
 	}
 }
 
@@ -211,7 +212,8 @@ func TestMessagesToBuf_FillsForward(t *testing.T) {
 	want0 := bytes.Repeat([]byte{'a'}, 80)
 	want1 := bytes.Repeat([]byte{'a'}, 80)
 	want2 := bytes.Repeat([]byte{'a'}, 40)
-	want3 := []byte("second")
+	want3 := m.blank // separator after first message
+	want4 := []byte("second")
 
 	if !bytes.Equal(m.screen[0], want0) {
 		t.Errorf("row 0: got %q want %q", m.screen[0], want0)
@@ -223,11 +225,14 @@ func TestMessagesToBuf_FillsForward(t *testing.T) {
 		t.Errorf("row 2: got %q want %q", m.screen[2], want2)
 	}
 	if !bytes.Equal(m.screen[3], want3) {
-		t.Errorf("row 3: got %q want %q", m.screen[3], want3)
+		t.Errorf("row 3: got %q want blank (separator)", m.screen[3])
 	}
-	// Row 4 should still be the blank (no message overflow).
-	if !bytes.Equal(m.screen[4], m.blank) {
-		t.Errorf("row 4: got %q want blank", m.screen[4])
+	if !bytes.Equal(m.screen[4], want4) {
+		t.Errorf("row 4: got %q want %q", m.screen[4], want4)
+	}
+	// Row 5 should still be the blank (no more content).
+	if !bytes.Equal(m.screen[5], m.blank) {
+		t.Errorf("row 5: got %q want blank", m.screen[5])
 	}
 }
 

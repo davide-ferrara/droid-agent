@@ -19,11 +19,11 @@ func Render(screen [][]byte, dirty []bool, statusRow int) {
 			continue
 		}
 		term.Write(screen[i], i+1, 1)
-		// Skip the trailing ESC[K for the status row: it already
-		// embeds ClearLine inside its styled run so a second
-		// clear would run after \033[0m and erase the cyan bg
-		// fill that the embedded ESC[K just laid down.
-		if i != statusRow {
+		// Skip ESC[K for rows that already embed their own
+		// clear-to-end-of-line inside ANSI escapes (status bar,
+		// user message rows with background tint). Those rows
+		// start with \033; plain text or blank rows don't.
+		if len(screen[i]) == 0 || screen[i][0] != '\033' {
 			term.ClearCurrentLine()
 		}
 		if dirty != nil && i < len(dirty) {

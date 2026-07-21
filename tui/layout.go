@@ -25,6 +25,6 @@ func inputHeight(m *Model) int {
 	return row + 1
 }
 
-func inputRow(m *Model) int      { return m.TermRows - statusBarHeight - inputHeight(m) }
+func inputRow(m *Model) int      { return m.TermRows - statusBarHeight - inputHeight(m) - 1 }
 func statusBarRow(termRows int) int { return termRows - statusBarHeight }
-func chatAreaRows(m *Model) int  { return m.TermRows - inputHeight(m) - statusBarHeight }
+func chatAreaRows(m *Model) int  { return m.TermRows - inputHeight(m) - statusBarHeight - 1 }
