@@ -60,15 +60,21 @@ func NewView(model *Model) [][]byte {
 	// Reuse model.screen / model.blank / model.inputScratch across
 	// frames. Reallocate only when the terminal has resized (or
 	// first call). This keeps a keystroke allocation-free in the
-	// common case.
+	// common case. The dirty mask starts fully set on every
+	// (re)allocation so the first paint covers the whole screen.
 	if cap(model.screen) < model.TermRows || cap(model.blank) < model.TermCols {
 		model.screen = make([][]byte, model.TermRows)
 		model.blank = make([]byte, model.TermCols)
 		model.inputScratch = make([]byte, model.TermCols)
+		model.dirtyRows = make([]bool, model.TermRows)
+		for i := range model.dirtyRows {
+			model.dirtyRows[i] = true
+		}
 	} else {
 		model.screen = model.screen[:model.TermRows]
 		model.blank = model.blank[:model.TermCols]
 		model.inputScratch = model.inputScratch[:model.TermCols]
+		model.dirtyRows = model.dirtyRows[:model.TermRows]
 	}
 
 	// Refill the blank with spaces — cheap, no new alloc. We
@@ -83,21 +89,29 @@ func NewView(model *Model) [][]byte {
 		screenBuf[i] = model.blank
 	}
 
-	// NOTE: Fill the screen with the last messages, maybe they
-	// should belong to the model state so we can implement
-	// scrolling, good enough for now.
-	// With UFT-8 len(text) is not enough since char are of 4
+	// NOTE: With UFT-8 len(text) is not enough since char are of 4
 	// bytes, must use runewidht
-	max := chatAreaRows(model.TermRows)
-	start := 0
+	maxRows := chatAreaRows(model.TermRows)
 	nMsg := len(model.Messages)
-	if nMsg > max {
-		start = nMsg - max
+	// Clamp scroll to its valid range so a resize, deletion,
+	// or new message never leaves a blank viewport.
+	if model.Scroll < 0 {
+		model.Scroll = 0
 	}
-	for i := start; i < nMsg; i++ {
+	if max := nMsg - maxRows; model.Scroll > max {
+		model.Scroll = max
+		if model.Scroll < 0 {
+			model.Scroll = 0
+		}
+	}
+	end := model.Scroll + maxRows
+	if end > nMsg {
+		end = nMsg
+	}
+	for i := model.Scroll; i < end; i++ {
 		// NOTE: In the future it will wrap not be only cutted out
 		clamp := min(model.TermCols, len(model.Messages[i].Text))
-		screenBuf[i-start] = []byte(model.Messages[i].Text[:clamp])
+		screenBuf[i-model.Scroll] = []byte(model.Messages[i].Text[:clamp])
 	}
 
 	screenBuf[statusBarRow(model.TermRows)] = statusBarView(*model)
