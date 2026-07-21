@@ -7,7 +7,7 @@ import (
 	"droid/term"
 )
 
-type InputLine struct {
+type Input struct {
 	buf     []byte
 	x       int
 	cursorX int
@@ -15,9 +15,9 @@ type InputLine struct {
 }
 
 // MoveCursorTo positions the terminal cursor at the input line.
-// inputLineRow is 0-indexed; +1 converts to 1-indexed for the terminal.
-func (line *InputLine) MoveCursorTo(inputLineRow int) {
-	term.MoveCursor(inputLineRow+line.cursorY+1, line.x+line.cursorX+1)
+// row is 0-indexed; +1 converts to 1-indexed for the terminal.
+func (in *Input) MoveCursorTo(row int) {
+	term.MoveCursor(row+in.cursorY+1, in.x+in.cursorX+1)
 }
 
 func pollResize(model *Model) bool {
@@ -34,25 +34,25 @@ func pollResize(model *Model) bool {
 	return false
 }
 
-func (line *InputLine) HandleBackspace() {
-	if line.cursorX == 0 {
+func (in *Input) HandleBackspace() {
+	if in.cursorX == 0 {
 		return
 	}
-	line.buf = append(line.buf[:line.cursorX-1], line.buf[line.cursorX:]...)
-	line.cursorX--
-	dbgLine(line)
+	in.buf = append(in.buf[:in.cursorX-1], in.buf[in.cursorX:]...)
+	in.cursorX--
+	dbgInput(in)
 }
 
-func (line *InputLine) HandleEnter() {
-	line.buf = line.buf[:0]
-	line.cursorX = 0
-	dbgLine(line)
+func (in *Input) HandleEnter() {
+	in.buf = in.buf[:0]
+	in.cursorX = 0
+	dbgInput(in)
 }
 
-func (line *InputLine) HandleLine(ch byte) {
-	line.buf = append(line.buf, ch)
-	line.cursorX++
-	dbgLine(line)
+func (in *Input) HandleLine(ch byte) {
+	in.buf = append(in.buf, ch)
+	in.cursorX++
+	dbgInput(in)
 }
 
 func handleCtrl(model *Model, key byte) {
@@ -60,11 +60,11 @@ func handleCtrl(model *Model, key byte) {
 	case term.CtrlH, term.Backspace:
 		model.Input.HandleBackspace()
 		Render(NewView(model))
-		model.Input.MoveCursorTo(inputLineRow(model.TermRows))
+		model.Input.MoveCursorTo(inputRow(model.TermRows))
 	case term.Enter, term.CtrlJ:
 		model.Input.HandleEnter()
 		Render(NewView(model))
-		model.Input.MoveCursorTo(inputLineRow(model.TermRows))
+		model.Input.MoveCursorTo(inputRow(model.TermRows))
 	default:
 		log.Printf("Unhandled: %x", key)
 	}
@@ -86,13 +86,13 @@ func handleCSI(sequence string) {
 }
 
 func HandleInput(reader *bufio.Reader, model *Model) {
-	model.Input.MoveCursorTo(inputLineRow(model.TermRows))
+	model.Input.MoveCursorTo(inputRow(model.TermRows))
 	for {
 		ev := term.ReadKey(reader)
 
 		if pollResize(model) {
 			Render(NewView(model))
-			model.Input.MoveCursorTo(inputLineRow(model.TermRows))
+			model.Input.MoveCursorTo(inputRow(model.TermRows))
 			continue
 		}
 
@@ -105,7 +105,7 @@ func HandleInput(reader *bufio.Reader, model *Model) {
 		case term.KindPrintable:
 			model.Input.HandleLine(ev.Byte)
 			Render(NewView(model))
-			model.Input.MoveCursorTo(inputLineRow(model.TermRows))
+			model.Input.MoveCursorTo(inputRow(model.TermRows))
 		case term.KindCtrl:
 			handleCtrl(model, ev.Byte)
 		case term.KindCSI:

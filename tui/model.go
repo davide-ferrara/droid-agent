@@ -20,7 +20,7 @@ type Model struct {
 	TermRows  int
 	TermCols  int
 	Status    string
-	Input     InputLine
+	Input     Input
 	Messages  []Message
 	Mode      Mode
 	ModelName string

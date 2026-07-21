@@ -8,7 +8,7 @@ import (
 	"droid/term"
 )
 
-func inputLineView(model Model) []byte {
+func inputView(model Model) []byte {
 	return model.Input.buf
 }
 
@@ -57,10 +57,10 @@ func NewView(model *Model) [][]byte {
 
 	screenBuf[statusBarRow(model.TermRows)] = statusBarView(*model)
 
-	inputRow := inputLineRow(model.TermRows)
-	inputLine := fillLine(model.TermCols, ' ')
-	copy(inputLine, inputLineView(*model))
-	screenBuf[inputRow] = inputLine
+	row := inputRow(model.TermRows)
+	line := fillLine(model.TermCols, ' ')
+	copy(line, inputView(*model))
+	screenBuf[row] = line
 
 	return screenBuf
 }

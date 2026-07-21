@@ -2,8 +2,8 @@ package tui
 
 import "log"
 
-func dbgLine(line *InputLine) {
-	log.Printf("line: %s\n", line.buf)
+func dbgInput(in *Input) {
+	log.Printf("input: %s\n", in.buf)
 }
 
 func dbgModel(m *Model, cursorRow, cursorCol int) {

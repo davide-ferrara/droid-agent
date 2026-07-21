@@ -6,5 +6,5 @@ package tui
 //	TermRows-2:       input line
 //	TermRows-1:       status bar
 
-func inputLineRow(termRows int) int { return termRows - 2 }
+func inputRow(termRows int) int { return termRows - 2 }
 func statusBarRow(termRows int) int { return termRows - 1 }
