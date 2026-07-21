@@ -5,6 +5,17 @@ import (
 	"testing"
 )
 
+// styledRow wraps raw content in the ANSI background escape that
+// inputLineToBuf applies to every scratch row.
+func styledRow(content []byte) []byte {
+	r := make([]byte, 0, len(content)+23)
+	r = append(r, "\033[48;2;42;42;46m"...)
+	r = append(r, content...)
+	r = append(r, "\033[K"...)
+	r = append(r, "\033[0m"...)
+	return r
+}
+
 // TestInputLineToBuf_ASCIIWraps encodes the pty scenario "200
 // a's rendered across 3 input rows": row 0 and row 1 are full
 // of 80 a's, row 2 has 40.
@@ -21,9 +32,9 @@ func TestInputLineToBuf_ASCIIWraps(t *testing.T) {
 	inputLineToBuf(&m, m.screen)
 
 	top := inputRow(&m)
-	wantRow0 := bytes.Repeat([]byte{'a'}, 80)
-	wantRow1 := bytes.Repeat([]byte{'a'}, 80)
-	wantRow2 := bytes.Repeat([]byte{'a'}, 40)
+	wantRow0 := styledRow(bytes.Repeat([]byte{'a'}, 80))
+	wantRow1 := styledRow(bytes.Repeat([]byte{'a'}, 80))
+	wantRow2 := styledRow(bytes.Repeat([]byte{'a'}, 40))
 
 	if got := m.screen[top]; !bytes.Equal(got, wantRow0) {
 		t.Errorf("row 0: got %d bytes want %d", len(got), len(wantRow0))
@@ -61,12 +72,12 @@ func TestInputLineToBuf_WideRuneAtRowEnd(t *testing.T) {
 
 	top := inputRow(&m)
 	// Row 0: 79 a's + 1 space (blank gap).
-	wantRow0 := append(bytes.Repeat([]byte{'a'}, 79), ' ')
+	wantRow0 := styledRow(append(bytes.Repeat([]byte{'a'}, 79), ' '))
 	if got := m.screen[top]; !bytes.Equal(got, wantRow0) {
 		t.Errorf("row 0: got %q want %q", got, wantRow0)
 	}
 	// Row 1: the emoji's 4 UTF-8 bytes only (col 0-1).
-	wantRow1 := []byte("😀")
+	wantRow1 := styledRow([]byte("😀"))
 	if got := m.screen[top+1]; !bytes.Equal(got, wantRow1) {
 		t.Errorf("row 1: got %q want %q", got, wantRow1)
 	}
@@ -96,7 +107,7 @@ func TestInputLineToBuf_CombiningMarkOverlay(t *testing.T) {
 	// The scratch should contain the raw 3-byte sequence
 	// "e\u0300" since inputLineToBuf appends the combining
 	// mark's UTF-8 bytes to the same row.
-	want := []byte("e\u0300")
+	want := styledRow([]byte("e\u0300"))
 	if got := m.screen[top]; !bytes.Equal(got, want) {
 		t.Errorf("got %q want %q", got, want)
 	}
@@ -128,12 +139,12 @@ func TestInputLineToBuf_MixedWidthAcrossWrap(t *testing.T) {
 
 	top := inputRow(&m)
 	// Row 0: 78 a's + 你 (3 UTF-8 bytes for cols 78-79).
-	wantRow0 := append(bytes.Repeat([]byte{'a'}, 78), []byte("你")...)
+	wantRow0 := styledRow(append(bytes.Repeat([]byte{'a'}, 78), []byte("你")...))
 	if got := m.screen[top]; !bytes.Equal(got, wantRow0) {
 		t.Errorf("row 0: got %q want %q", got, wantRow0)
 	}
 	// Row 1: 好 only.
-	wantRow1 := []byte("好")
+	wantRow1 := styledRow([]byte("好"))
 	if got := m.screen[top+1]; !bytes.Equal(got, wantRow1) {
 		t.Errorf("row 1: got %q want %q", got, wantRow1)
 	}
@@ -152,8 +163,9 @@ func TestInputLineToBuf_EmptyBuffer(t *testing.T) {
 	inputLineToBuf(&m, m.screen)
 
 	top := inputRow(&m)
-	if len(m.screen[top]) != 0 {
-		t.Errorf("empty buf row: got %d bytes want 0", len(m.screen[top]))
+	// Styled empty row: prefix (16) + clear (3) + reset (4) = 23.
+	if len(m.screen[top]) != 23 {
+		t.Errorf("empty buf row: got %d bytes want 23", len(m.screen[top]))
 	}
 }
 
@@ -203,7 +215,7 @@ func TestInputLineToBuf_ScratchReuse(t *testing.T) {
 	// Row 0 must hold exactly 5 a's, not the 80 from the first
 	// pass (catches the reslice-but-not-truncate bug).
 	top := inputRow(&m)
-	want := []byte("aaaaa")
+	want := styledRow([]byte("aaaaa"))
 	if got := m.screen[top]; !bytes.Equal(got, want) {
 		t.Errorf("second pass row 0: got %q want %q", got, want)
 	}

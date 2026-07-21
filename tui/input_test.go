@@ -278,17 +278,18 @@ func TestHandleRune_AnchoredScrollFollowsInputGrowth(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		m.Messages = append(m.Messages, Message{Text: string(repeatRune('a', cols))})
 	}
-	// +1 separator per message → 2 rows each.
-	// Empty input: inputHeight=1, chatAreaRows=21, maxScroll=15
-	// (messages [15..25) = 10×2 = 20 rows, next +2=22 > 21).
+	// +1 separator per message (except latest) → last 1 row,
+	// others 2 rows.
+	// Empty input: inputHeight=1, chatAreaRows=20, maxScroll=15
+	// (last 1 + 9×2 = 19 ≤ 20, next +2=22 > 20).
 	m.Scroll = maxScroll(&m)
 	if m.Scroll != 15 {
 		t.Fatalf("setup: Scroll=%d want 15", m.Scroll)
 	}
 
 	// Type 80 a's: inputHeight grows from 1 to 2. chatAreaRows
-	// shrinks from 21 to 20, maxScroll stays 15
-	// (10 messages × 2 = 20 rows, next +2=22 > 20).
+	// shrinks from 20 to 19, maxScroll stays 15
+	// (last 1 + 9×2 = 19).
 	for i := 0; i < 80; i++ {
 		m.handleRune('a')
 	}
@@ -306,8 +307,8 @@ func TestHandleRune_AnchoredScrollFollowsInputGrowth(t *testing.T) {
 	}
 
 	// Type the 160th 'a': triggers inputHeight 2→3 (2 full rows,
-	// cursor at virtual row 2 col 0). chatAreaRows=19, maxScroll
-	// goes to 16 (9 messages × 2 = 18 rows, next +2=20 > 19).
+	// cursor at virtual row 2 col 0). chatAreaRows=18, maxScroll
+	// goes to 16 (last 1 + 8×2 = 17 ≤ 18, next +2=20 > 18).
 	m.handleRune('a')
 	if m.Scroll != 16 {
 		t.Errorf("after 160 a's (2->3 rows): Scroll=%d want 16", m.Scroll)
@@ -323,8 +324,8 @@ func TestBackspace_AnchoredScrollPreserved(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		m.Messages = append(m.Messages, Message{Text: string(repeatRune('a', cols))})
 	}
-	// +1 separator per message → 2 rows each.
-	// Type 81 a's: inputHeight=2, chatAreaRows=20, maxScroll=15.
+	// +1 separator per message (except latest).
+	// Type 81 a's: inputHeight=2, chatAreaRows=19, maxScroll=15.
 	for i := 0; i < 81; i++ {
 		m.Input.HandleLine('a', cols)
 	}
@@ -357,7 +358,7 @@ func TestHandleRune_ScrollUnchangedWhenNotAnchored(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		m.Messages = append(m.Messages, Message{Text: string(repeatRune('a', cols))})
 	}
-	// maxScroll = 3, but set Scroll to 0 (scrolled way up).
+	// maxScroll is much higher, but set Scroll to 0 (scrolled way up).
 	m.Scroll = 0
 
 	// Type 80 a's: inputHeight grows from 1 to 2. Scroll stays 0.
@@ -456,8 +457,8 @@ func TestInputLineToBuf_WordWrap(t *testing.T) {
 	inputLineToBuf(&m, m.screen)
 
 	top := inputRow(&m)
-	wantRow0 := []byte("hello")
-	wantRow1 := []byte("bigworld")
+	wantRow0 := styledRow([]byte("hello"))
+	wantRow1 := styledRow([]byte("bigworld"))
 	if got := m.screen[top]; !bytes.Equal(got, wantRow0) {
 		t.Errorf("row 0: got %q want %q", got, wantRow0)
 	}
@@ -482,8 +483,8 @@ func TestInputLineToBuf_WordWrapConsumedSpace(t *testing.T) {
 	inputLineToBuf(&m, m.screen)
 
 	top := inputRow(&m)
-	wantRow0 := []byte("abcdefg")
-	wantRow1 := []byte("h")
+	wantRow0 := styledRow([]byte("abcdefg"))
+	wantRow1 := styledRow([]byte("h"))
 	if got := m.screen[top]; !bytes.Equal(got, wantRow0) {
 		t.Errorf("row 0: got %q want %q", got, wantRow0)
 	}

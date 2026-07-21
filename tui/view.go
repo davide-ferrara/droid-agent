@@ -136,7 +136,13 @@ func maxScroll(model *Model) int {
 	rowsUsed := 0
 	i := nMsg
 	for i > 0 {
-		mr := messageRows(model.Messages[i-1].Text, model.TermCols) + 1 // +1 for blank separator
+		mr := messageRows(model.Messages[i-1].Text, model.TermCols)
+		// Messages before the latest get a +1 for the blank
+		// separator after them. The latest has no trailing
+		// separator (avoids double gap with input area).
+		if i < nMsg {
+			mr++
+		}
 		if rowsUsed+mr > maxRows {
 			break
 		}
@@ -174,6 +180,10 @@ func clampScroll(model *Model) (start, end int) {
 
 // messagesToBuf writes the visible messages into the chat area of
 // screen, wrapping each message into display rows via wrapMessage.
+// Messages are packed to the bottom of the chat area so the fixed
+// gap row between chat and input is always right after the last
+// message content — no stacking with unused slack rows.
+//
 // Walks forward from Scroll, writing wrapped rows until either
 // the messages run out or the chat area is full. Single messages
 // taller than the viewport are truncated at the top by ScreenIdx
@@ -183,7 +193,25 @@ func messagesToBuf(model *Model, screen [][]byte) {
 	start, end := clampScroll(model)
 	maxRows := chatAreaRows(model)
 	cols := model.TermCols
-	screenIdx := 0
+
+	// First pass: count total display rows for all visible messages
+	// (content rows + separators between messages).
+	total := 0
+	for i := start; i < end; i++ {
+		total += len(wrapMessage(model.Messages[i].Text, cols))
+		if i < end-1 {
+			total++ // separator
+		}
+	}
+
+	// Pack messages to the bottom. Slack (unused rows) goes to the
+	// top of the chat area, so the gap after the last message is
+	// always exactly 1 row (at position maxRows).
+	screenIdx := maxRows - total
+	if screenIdx < 0 {
+		screenIdx = 0
+	}
+
 	for i := start; i < end && screenIdx < maxRows; i++ {
 		rows := wrapMessage(model.Messages[i].Text, cols)
 		// If a single message doesn't fit, drop its leading rows
@@ -211,7 +239,9 @@ func messagesToBuf(model *Model, screen [][]byte) {
 		}
 		// Blank separator between messages (fillBlanks already
 		// filled every row with spaces; we just skip one).
-		if screenIdx < maxRows {
+		// No separator after the last message so the gap
+		// betwen chat and input isn't doubled.
+		if i < end-1 && screenIdx < maxRows {
 			screenIdx++
 		}
 	}
@@ -329,7 +359,12 @@ func inputLineToBuf(model *Model, screen [][]byte) {
 		}
 	}
 	for i := range scratches {
-		screen[top+i] = scratches[i]
+		styled := make([]byte, 0, len(scratches[i])+20)
+		styled = append(styled, "\033[48;2;42;42;46m"...)
+		styled = append(styled, scratches[i]...)
+		styled = append(styled, term.ClearLine...)
+		styled = append(styled, "\033[0m"...)
+		screen[top+i] = styled
 	}
 }
 

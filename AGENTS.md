@@ -31,6 +31,7 @@ them heavy, buggy and too generalized, our must be a feather.
 
 - Write the dumbest code that works.
 - When working with strings formatting avoid fmt.Snprintf or similar
+- Always prefer stack over heap allocation.
   since are inefficient, let's use the stack when possibile.
 - No god functions, every function must be short with single responsability.
 - Keep the implementation small, sharp, easy to understand.
