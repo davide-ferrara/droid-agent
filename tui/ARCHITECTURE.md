@@ -5,12 +5,12 @@
 `tui/` is a small Elm-like loop on top of the `term/` raw-mode
 package. There is no framework — every byte that reaches stdout
 goes through `Render`, and every keystroke flows through
-`HandleInput`.
+`HandleKeyPress`.
 
 ## The loop
 
 ```text
-ReadKey ─▶ HandleInput ─▶ Input/Model mutation ─▶ NewView
+ReadKey ─▶ HandleKeyPress ─▶ Input/Model mutation ─▶ NewView
                                       │              │
                                       │              ▼
                                  dirtyRows ◀── screen [][]byte
@@ -21,22 +21,22 @@ ReadKey ─▶ HandleInput ─▶ Input/Model mutation ─▶ NewView
 
 1. `term.ReadKey` returns one event per key (printable, Ctrl,
    CSI, EOF, Quit).
-2. `HandleInput` calls `pollResize` first — on change it
+2. `HandleKeyPress` calls `pollResize` first — on change it
    recomputes `TermCols`/`TermRows`, clamps the cursor, marks
    every row dirty.
-3. The event is dispatched to `handleInput` / `handleCtrl` /
+3. The event is dispatched to `handleChar` / `handleCtrl` /
    `handleCSI`.
 4. Each handler mutates `Input` or `Messages`, then sets the
    relevant bits in `dirtyRows`. Cursor-only moves skip the
    repaint entirely and just `MoveCursorTo`.
-5. `renderInput` calls `NewView` then `Render`. `NewView` fills
+5. `renderFrame` calls `NewView` then `Render`. `NewView` fills
    the persistent `screen [][]byte`; `Render` writes only dirty
    rows and clears their bits.
 
 ## Files
 
 - `tui.go` — `Run()`, opens the input reader and calls
-  `HandleInput`.
+  `HandleKeyPress`.
 - `model.go` — `Model`, `Message`, `Mode`, `NewModel`.
 - `layout.go` — `inputRow` / `statusBarRow` / `chatAreaRows`
   derived from `inputHeight` + `statusBarHeight` constants so
@@ -59,11 +59,16 @@ ReadKey ─▶ HandleInput ─▶ Input/Model mutation ─▶ NewView
 ## Screen layout
 
 ```text
-0 .. chatAreaRows-1        messages (scrollable via Model.Scroll)
-chatAreaRows .. inputRow-1 reserved for future input growth
-inputRow                   single-line input (today)
+0 .. inputRow-1            messages (scrollable via Model.Scroll)
+inputRow .. inputRow+H-1   multi-line input (H rows; grows with the buffer)
 statusBarRow               colored status bar
 ```
+
+`H` = `inputHeight(model)`, derived from the byte length of the
+input buffer — typing past `cols` bumps H to 2, then 3, ... and
+the chat area shrinks by the same amount. The cursor row inside
+the input area is `cursorY` (derived from `cursorX`); the row
+the cursor blinks on is `inputRow + cursorY`.
 
 ## Persistent buffers
 
@@ -73,15 +78,17 @@ common case allocates zero bytes:
 - `screen [][]byte` — one slice header per row, indexed as above
 - `blank []byte` — one reusable blank row, shared by every empty
   chat row (safe because blank rows are never mutated in place)
-- `inputScratch []byte` — a private scratch row for the input
-  line; the input row is the one row that does get mutated, so
-  it avoids aliasing `blank`
+- `inputScratches [][]byte` — one scratch per wrapped input row,
+  each `len == TermCols`; grows with `inputHeight` (per-row
+  capacities are checked independently so a horizontal resize
+  only reallocates the rows whose `cap` is below `cols`)
 - `dirtyRows []bool` — row-level dirty mask
 
-`reallocScreenBufs` only reallocates on resize (cap check);
-otherwise it reslices to the new dimensions. The dirty mask
-starts fully set right after a realloc so the first paint covers
-the whole screen.
+`reallocScreenBufs` only reallocates `screen`/`blank`/`dirtyRows`
+on resize (cap check); `inputScratches` is checked every frame
+because `inputHeight` can change any time `buf` grows past a
+wrap. The dirty mask starts fully set right after a full realloc
+so the first paint covers the whole screen.
 
 ## Truncation
 
@@ -105,7 +112,12 @@ regional indicators, and CJK terminal detection are correct.
 - Small and idiomatic. Each file has one responsibility; every
   function is short and named for what it does.
 - Allocation-free keystrokes thanks to persistent `screen` /
-  `blank` / `inputScratch` buffers on `Model`.
+  `blank` / `inputScratches` buffers on `Model`.
+- Multi-line input via soft-wrap: typing past `cols` bumps
+  `inputHeight` and the chat area shrinks by the same number of
+  rows. Backspace correctly retracts wrap; Left/Right cross wrap
+  boundaries without repaints (cursor-only moves reposition via
+  `MoveCursorTo`).
 - Row-level dirty mask — cursor-only moves skip `Render`
   entirely and just reposition via `MoveCursorTo`.
 - Rune-aware truncation: Italian accents, CJK, emoji, ZWJ all
@@ -126,13 +138,22 @@ regional indicators, and CJK terminal detection are correct.
 
 # Cons / known limits
 
-- Single-line input only. `Input.cursorY` is reserved for future
-  soft-wrap but always zero today. No multi-line editing,
-  no vertical cursor movement, no up/down CSI handling.
-- `HandleLine(ch byte)` operates on raw bytes. UTF-8 sequences
-  received in raw mode are split into individual byte events,
-  so typing non-ASCII characters corrupts the buffer. Needs
-  rune reconstruction before multi-line input is useful.
+- Multi-line input is byte-oriented: `HandleLine(ch byte, cols)`
+  operates on raw bytes, so a multi-byte UTF-8 sequence arriving
+  via raw mode is split into per-byte events and corrupts the
+  buffer. Need rune reconstruction before non-ASCII typing
+  composes correctly inside the wrap math.
+- The wrap math itself is byte-based: `cursorRow = (cursorX-1)/cols`
+  and `inputHeight = (len(buf)-1)/cols + 1` assume one byte per
+  column, so any rune wider than 1 byte desyncs the cursor.
+  `width.go` already has rune-aware width math; the input path
+  needs to use it next.
+- No Up/Down CSI handlers — the cursor can only move within a
+  row via Left/Right. Vertical navigation across wrapped rows
+  is the next gap.
+- Message rows still hard-truncate at `TermCols` via
+  `truncateToCols`. Long messages do not wrap onto the next chat
+  row; that's the other half of soft-wrap.
 - No streaming output / spinners for `ModeLoading` and
   `ModeStreaming`. The modes exist but the visual does not.
 - No theming hook. ANSI color codes are inlined in
@@ -153,28 +174,33 @@ regional indicators, and CJK terminal detection are correct.
 
 # Roadmap (priority order)
 
-1. **Multi-line cursor + message rendering**
-   Make `Input.cursorY` real: when `buf` exceeds `TermCols` it
-   should soft-wrap into `inputHeight > 1` rows, shrinking the
-   chat area via `chatAreaRows`. Up/Down arrows move by screen
-   row, Enter at end-of-buf submits, Shift+Enter inserts a
-   newline (or whatever keybinding wins). Messages also need
-   wrap-aware rendering — long messages currently truncate at
-   the right edge, they should flow onto the next row.
-2. **Goroutines for input / render / agent**
+1. **Rune-aware input + wrap math**
+   `HandleLine` accepts runes, `cursorRow` / `inputHeight` use
+   `runeWidth` (already in `width.go`) instead of byte-index
+   math. Then Up/Down CSI to navigate across wrapped rows by
+   screen row; Enter at end-of-buf submits, Shift+Enter inserts
+   a newline.
+2. **Message wrapping**
+   `messagesToBuf` today hard-truncates each message to
+   `TermCols`; long messages disappear off the right edge. Make
+   it wrap vertically so a single message can occupy multiple
+   chat rows. `chatAreaRows` then needs to count *displayed*
+   rows, not message indices.
+3. **Goroutines for input / render / agent**
    Today the input loop is a blocking `for { term.ReadKey }`.
    Split into three: one reads keys, one renders frames, one
    will talk to the model. They communicate over channels; the
    render goroutine owns `Model` to avoid races. Unblocks
    streaming output later.
-3. **Theming stub**
+4. **Theming stub**
    `type Theme struct{ StatusBarBg, StatusBarFg [3]byte }` (and
    friends), passed into `statusBarView`. Removes the raw
    `\033[38;2;0;0;0m\033[48;2;0;180;244m` literals. Start
    hardcoded — no config file yet.
-4. **Tests**
-   `truncateToCols`, `clampScroll`, `layout.go` math, and the
-   dirty-mask plumbing are all pure functions — easy wins. Then
-   add a fake `term` interface for `HandleInput`-level tests.
+5. **Tests**
+   `truncateToCols`, `clampScroll`, `layout.go` math, the dirty-mask
+   plumbing, and `cursorRow` / `inputHeight` derivation are all
+   pure functions — easy wins. Then add a fake `term` interface
+   for `HandleKeyPress`-level tests.
 
 The next milestone is #1. Everything else stacks on top of it.

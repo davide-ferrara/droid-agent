@@ -9,5 +9,5 @@ import (
 func Run() {
 	reader := bufio.NewReader(os.Stdin)
 	model := NewModel()
-	HandleInput(reader, &model)
+	HandleKeyPress(reader, &model)
 }

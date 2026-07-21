@@ -2,23 +2,30 @@ package tui
 
 // Screen layout (0-indexed rows):
 //
-//	0 .. chatAreaRows-1:               content area (messages)
-//	chatAreaRows .. inputRow-1:        reserved for future input growth
-//	inputRow:                          input line
-//	statusBarRow:                      status bar
+//	0 .. inputRow-1:        content area (messages)
+//	inputRow .. (s-1):      multi-line input (inputHeight rows; grows on wrap)
+//	statusBarRow:          status bar
 //
-// All values are derived from termRows so that a single resize
-// only needs to recompute one place. When the input line grows
-// (multi-line editing), inputHeight returns >1 and the chat
-// area shrinks automatically.
-
-// inputHeight is the number of rows the input line occupies.
-// For now 1; will grow with multi-line editing.
-const inputHeight = 1
+// inputHeight grows with the wrapped input buffer so the chat
+// area shrinks automatically as the user types past the right
+// edge. statusBarRow stays pinned to the bottom regardless.
 
 // statusBarHeight is the number of rows the status bar occupies.
 const statusBarHeight = 1
 
-func inputRow(termRows int) int { return termRows - statusBarHeight - inputHeight }
+// inputHeight is the number of rows the input area occupies,
+// derived from the byte length of the input buffer so the chat
+// area shrinks exactly as the buffer wraps. Floors at 1.
+// TODO: byte-based math is ASCII-only; switch to rune-width-aware
+// truncation when HandleLine accepts runes.
+func inputHeight(m *Model) int {
+	cols := m.TermCols
+	if cols <= 0 || len(m.Input.buf) == 0 {
+		return 1
+	}
+	return (len(m.Input.buf)-1)/cols + 1
+}
+
+func inputRow(m *Model) int      { return m.TermRows - statusBarHeight - inputHeight(m) }
 func statusBarRow(termRows int) int { return termRows - statusBarHeight }
-func chatAreaRows(termRows int) int { return termRows - inputHeight - statusBarHeight }
+func chatAreaRows(m *Model) int  { return m.TermRows - inputHeight(m) - statusBarHeight }

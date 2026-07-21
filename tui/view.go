@@ -8,11 +8,7 @@ import (
 	"droid/term"
 )
 
-func inputView(model Model) []byte {
-	return model.Input.buf
-}
-
-// NOTE: if the screen is too zommed in the status bar
+// NOTE: if the screen is too zoomed in the status bar
 // will mess the input line if occupies more than 1 line
 func statusBarView(model Model) []byte {
 	var fixedBuf [256]byte
@@ -60,22 +56,48 @@ func sizeOK(model *Model) bool {
 // reallocScreenBufs (re)allocates the persistent render buffers on
 // the Model so subsequent frames stay allocation-free. On realloc
 // the dirty mask is fully set so the first paint covers the whole
-// screen; on reuse we just reslice to the new dimensions.
+// screen; on reuse we just reslice to the new dimensions. The
+// per-row input scratches grow with inputHeight (one []byte per
+// wrapped input row, distinct backings so they don't alias each
+// other or the shared blank).
 func reallocScreenBufs(model *Model) {
 	if cap(model.screen) < model.TermRows || cap(model.blank) < model.TermCols {
 		model.screen = make([][]byte, model.TermRows)
 		model.blank = make([]byte, model.TermCols)
-		model.inputScratch = make([]byte, model.TermCols)
 		model.dirtyRows = make([]bool, model.TermRows)
 		for i := range model.dirtyRows {
 			model.dirtyRows[i] = true
 		}
-		return
+	} else {
+		model.screen = model.screen[:model.TermRows]
+		model.blank = model.blank[:model.TermCols]
+		model.dirtyRows = model.dirtyRows[:model.TermRows]
 	}
-	model.screen = model.screen[:model.TermRows]
-	model.blank = model.blank[:model.TermCols]
-	model.inputScratch = model.inputScratch[:model.TermCols]
-	model.dirtyRows = model.dirtyRows[:model.TermRows]
+	// inputScratches depends on inputHeight (which depends on
+	// buf length and cols), so it can change every frame —
+	// resize it outside the capacity-grow branch above.
+	reallocInputScratches(model)
+}
+
+// reallocInputScratches grows the per-row scratch slice for the
+// input area so each wrapped row has its own [cols]byte backing.
+// Reuses (reslicing to cols) when the same row is kept across a
+// resize; allocates fresh when the row count grows or a row's
+// capacity is below cols.
+func reallocInputScratches(model *Model) {
+	need := inputHeight(model)
+	if cap(model.inputScratches) < need {
+		model.inputScratches = make([][]byte, need)
+	} else {
+		model.inputScratches = model.inputScratches[:need]
+	}
+	for i := range model.inputScratches {
+		if cap(model.inputScratches[i]) < model.TermCols {
+			model.inputScratches[i] = make([]byte, model.TermCols)
+		} else {
+			model.inputScratches[i] = model.inputScratches[i][:model.TermCols]
+		}
+	}
 }
 
 // fillBlanks refills the shared blank row with spaces and points
@@ -94,7 +116,7 @@ func fillBlanks(model *Model) {
 // so a resize, deletion, or new message never leaves a blank
 // viewport. Returns the clamped value and the last visible index.
 func clampScroll(model *Model) (start, end int) {
-	maxRows := chatAreaRows(model.TermRows)
+	maxRows := chatAreaRows(model)
 	nMsg := len(model.Messages)
 	if model.Scroll < 0 {
 		model.Scroll = 0
@@ -129,15 +151,29 @@ func statusBarToBuf(model *Model, screen [][]byte) {
 	screen[statusBarRow(model.TermRows)] = statusBarView(*model)
 }
 
-// inputLineToBuf writes the input row into its layout row. Uses
-// inputScratch explicitly so the shared blank is not aliased — the
-// input line is the one row mutated in place each frame. Refill
-// from blank, then copy the input buffer on top.
+// inputLineToBuf writes the wrapped input area into its layout
+// rows. Each wrapped row gets its own dedicated scratch backing
+// (model.inputScratches[i]) so they don't alias each other or
+// the shared blank. The slice of buf that belongs on row i is
+// the half-open interval [i*cols, (i+1)*cols) clamped to buf
+// length.
 func inputLineToBuf(model *Model, screen [][]byte) {
-	scratch := model.inputScratch
-	copy(scratch, model.blank)
-	copy(scratch, inputView(*model))
-	screen[inputRow(model.TermRows)] = scratch
+	top := inputRow(model)
+	cols := model.TermCols
+	buf := model.Input.buf
+	for i, scratch := range model.inputScratches {
+		copy(scratch, model.blank)
+		start := i * cols
+		if start > len(buf) {
+			start = len(buf)
+		}
+		end := start + cols
+		if end > len(buf) {
+			end = len(buf)
+		}
+		copy(scratch, buf[start:end])
+		screen[top+i] = scratch
+	}
 }
 
 // NewView builds the next screen for Render. It orchestrates the

@@ -37,10 +37,10 @@ type Model struct {
 	// Persistent render buffers — reused across frames so a
 	// keystroke does not allocate the screen. Reallocated only
 	// when the terminal size changes (see NewView).
-	screen        [][]byte // rows indexed 0..TermRows-1
-	blank         []byte   // one reusable blank row, len == TermCols
-	inputScratch  []byte   // reusable scratch for the input row
-	dirtyRows     []bool   // row-level dirty mask, true = needs rewrite
+	screen         [][]byte   // rows indexed 0..TermRows-1
+	blank          []byte     // one reusable blank row, len == TermCols
+	inputScratches [][]byte  // one scratch per wrapped input row, each len == TermCols
+	dirtyRows      []bool     // row-level dirty mask, true = needs rewrite
 }
 
 func NewModel() Model {
