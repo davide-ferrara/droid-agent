@@ -3,7 +3,8 @@
 `droid` is a self-contained agent for Linux. It is not a generic Agent,
 it will have specific tooling for coding with additional
 security features missing in modern Agents.
-The goal is high-performance, no dependencies, Go codebase.
+The goal is high-performance, better if we code libs ourself when possibile,
+Go codebase.
 Modern Agents are built with typescript, node, lots of useless code that make
 them heavy, buggy and too generalized, our must be a feather.
 

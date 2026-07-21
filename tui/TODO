@@ -33,15 +33,16 @@
 3. `input.go:109` `handleCSI` only handles Left/Right/PageUp/
    PageDown; up/down/Home/End/Delete are silently logged-and-dropped.
    At least `Home`/`End` trivial given current `buf`.
-4. `view.go:78` — Truncation is byte-based; UTF-8 multi-byte chars
-   (e.g. Italian accents, emoji) will be cut mid-rune and corrupt
-   the terminal line. Needs `runewidth` / rune-aware truncation.
-5. `view.go:97-101` — Each displayed message still allocates one
+4. `view.go:97-101` — Each displayed message still allocates one
    `[]byte(Text[:clamp])` per frame. Bounded by `chatAreaRows` (~22)
    so not urgent; pool into a `msgScratch [][]byte` when this
    matters.
-6. `model.go` `NewModel` still embeds the DEBUG 100-message seed.
+5. `model.go` `NewModel` still embeds the DEBUG 100-message seed.
    Remove once real agent output is wired in.
+6. `input.go` `HandleLine(ch byte)` operates on bytes, so UTF-8
+   sequences typed in raw mode are split into bytes and the
+   terminal may render garbage. Needs rune reconstruction before
+   multi-line input work begins.
 
 ## Architectural gaps
 - No streaming output / spinners for `ModeLoading` and
@@ -59,8 +60,6 @@
    `\033[38;2;0;0;0m\033[48;2;0;180;244m` literal.
 3. **`Home`/`End`/`Delete` CSI** in `handleCSI` — trivial given
    existing cursor logic.
-4. **Rune-aware truncation** — swap byte slicing in `view.go:78`
-   for a `runewidth`-based wrapper so UTF-8 renders cleanly.
 
 Closed in this pass:
 - Bounds & safety guard in `NewView` (TermRows<2 / TermCols<1) —
@@ -100,3 +99,9 @@ Closed in this pass:
 - Status bar cols x rows display gated by a `Model.Debug` runtime
   flag — off by default, no per-keystroke `AppendInt` cost in
   normal use.
+- Rune-aware truncation: `runeWidth` + `truncateToCols` in
+  `width.go` (no external dep — covers East Asian widths, emoji,
+  combining marks). `messagesToBuf` slices by byte-offset-on-
+  rune-boundary, so Italian accents and emoji never render as
+  broken bytes. A wide rune that doesn't fit is dropped wholesale
+  rather than split.

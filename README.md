@@ -1,6 +1,11 @@
 # droid
 
-Self-contained LLM agent with a minimal TUI built in Go.
+LLM agent for Linux with a minimal TUI built in Go.
+
+Near-zero dependencies: `golang.org/x/sys` for raw termios,
+`github.com/mattn/go-runewidth` for correct UTF-8 column widths
+(Italian accents, CJK, emoji, ZWJ sequences). No TUI framework,
+no LLM SDK — just stdlib and those two.
 
 ## Development
 

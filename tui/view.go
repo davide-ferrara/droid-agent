@@ -113,14 +113,14 @@ func clampScroll(model *Model) (start, end int) {
 }
 
 // messagesToBuf writes the visible slice of model.Messages into
-// the chat area of screen. Each row is byte-clamped to TermCols;
-// NOTE: this will wrap once soft-wrap lands.
+// the chat area of screen. Each row is rune-aware-truncated to
+// TermCols; NOTE: this will wrap once soft-wrap lands.
 func messagesToBuf(model *Model, screen [][]byte) {
 	start, end := clampScroll(model)
 	for i := start; i < end; i++ {
 		// NOTE: In the future it will wrap not be only cutted out
-		clamp := min(model.TermCols, len(model.Messages[i].Text))
-		screen[i-start] = []byte(model.Messages[i].Text[:clamp])
+		endByte, _ := truncateToCols(model.Messages[i].Text, model.TermCols)
+		screen[i-start] = []byte(model.Messages[i].Text[:endByte])
 	}
 }
 
