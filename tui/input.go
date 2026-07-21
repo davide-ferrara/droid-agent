@@ -200,12 +200,17 @@ func (m *Model) handleRune(r rune) {
 	// shift up when input grows).
 	beforeRows := inputHeight(m)
 	beforeCursorRow := m.Input.cursorRow(m.TermCols)
+	beforeScroll := m.Scroll
+	beforeMaxScroll := maxScroll(m)
 	m.Input.HandleLine(r, m.TermCols)
 	afterRows := inputHeight(m)
 	afterCursorRow := m.Input.cursorRow(m.TermCols)
 	if beforeRows != afterRows {
 		// Input area grew by a row: chat area shrunk; repaint
 		// from scratch to fix both regions.
+		if beforeScroll == beforeMaxScroll {
+			m.Scroll = maxScroll(m)
+		}
 		m.markAllDirty()
 	} else if beforeCursorRow != afterCursorRow {
 		// Cursor moved to a different input row without height
@@ -224,6 +229,8 @@ func (m *Model) handleBackspace() {
 	// repaint in that case (the row did not actually change).
 	beforeBuf := len(m.Input.buf)
 	beforeRows := inputHeight(m)
+	beforeScroll := m.Scroll
+	beforeMaxScroll := maxScroll(m)
 	m.Input.HandleBackspace(m.TermCols)
 	if len(m.Input.buf) == beforeBuf {
 		return
@@ -236,6 +243,9 @@ func (m *Model) handleBackspace() {
 		m.markRowDirty(inputRow(m) + m.Input.cursorRow(m.TermCols))
 	} else {
 		// Input area shrunk: repaint chat (grew) and input.
+		if beforeScroll == beforeMaxScroll {
+			m.Scroll = maxScroll(m)
+		}
 		m.markAllDirty()
 	}
 	m.renderFrame()

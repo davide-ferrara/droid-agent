@@ -263,6 +263,107 @@ func TestHandleEnter_ResetsState(t *testing.T) {
 	}
 }
 
+// TestHandleRune_AnchoredScrollFollowsInputGrowth verifies that
+// when the input area grows (typing past the right edge wraps to a
+// new row) and Model.Scroll was anchored at maxScroll, Scroll is
+// re-anchored to the new maxScroll so the latest message stays
+// visible. Without this fix, the latest messages slide off the top
+// as the chat area shrinks and maxScroll increases.
+func TestHandleRune_AnchoredScrollFollowsInputGrowth(t *testing.T) {
+	cols := 80
+	m := Model{TermRows: 24, TermCols: cols}
+	for i := 0; i < 25; i++ {
+		m.Messages = append(m.Messages, Message{Text: string(repeatRune('a', cols))})
+	}
+	// Empty input: inputHeight=1, chatAreaRows=22, maxScroll=3
+	// (messages [3..25) = 22 rows, exactly fits).
+	m.Scroll = maxScroll(&m)
+	if m.Scroll != 3 {
+		t.Fatalf("setup: Scroll=%d want 3", m.Scroll)
+	}
+
+	// Type 80 a's: inputHeight grows from 1 to 2 (80 a's fill
+	// row 0, cursor at virtual row 1 col 0). chatAreaRows shrinks
+	// from 22 to 21, maxScroll goes from 3 to 4.
+	for i := 0; i < 80; i++ {
+		m.handleRune('a')
+	}
+	if m.Scroll != 4 {
+		t.Errorf("after 80 a's (1->2 rows): Scroll=%d want 4", m.Scroll)
+	}
+
+	// Type 79 more a's (total 159): inputHeight stays 2 so Scroll
+	// should remain at 4 (no re-anchor needed).
+	for i := 0; i < 79; i++ {
+		m.handleRune('a')
+	}
+	if m.Scroll != 4 {
+		t.Errorf("after 159 a's (same 2 rows): Scroll=%d want 4", m.Scroll)
+	}
+
+	// Type the 160th 'a': triggers inputHeight 2→3 (2 full rows,
+	// cursor at virtual row 2 col 0). maxScroll goes from 4 to 5.
+	m.handleRune('a')
+	if m.Scroll != 5 {
+		t.Errorf("after 160 a's (2->3 rows): Scroll=%d want 5", m.Scroll)
+	}
+}
+
+// TestBackspace_AnchoredScrollPreserved verifies that backspace
+// shrinking the input preserves anchoring when Scroll was at
+// maxScroll.
+func TestBackspace_AnchoredScrollPreserved(t *testing.T) {
+	cols := 80
+	m := Model{TermRows: 24, TermCols: cols}
+	for i := 0; i < 25; i++ {
+		m.Messages = append(m.Messages, Message{Text: string(repeatRune('a', cols))})
+	}
+	// Type 81 a's so that one backspace stays at inputHeight=2:
+	// 81 a's = row 0 full (80) + 1 on row 1, inputHeight=2.
+	for i := 0; i < 81; i++ {
+		m.Input.HandleLine('a', cols)
+	}
+	m.Scroll = maxScroll(&m)
+	if m.Scroll != 4 {
+		t.Fatalf("setup: Scroll=%d want 4", m.Scroll)
+	}
+
+	// Backspace 1 → 80 a's: inputHeight still 2 (same wrapped
+	// rows). Scroll stays 4.
+	m.handleBackspace()
+	if m.Scroll != 4 {
+		t.Errorf("after 1 BS (still 2 rows): Scroll=%d want 4", m.Scroll)
+	}
+
+	// Backspace 1 more → 79 a's: inputHeight drops to 1
+	// (cursor retreats to row 0). Scroll clamps to new maxScroll=3.
+	m.handleBackspace()
+	if m.Scroll != 3 {
+		t.Errorf("after 2 BS (2->1 rows): Scroll=%d want 3", m.Scroll)
+	}
+}
+
+// TestHandleRune_ScrollUnchangedWhenNotAnchored ensures that typing
+// with input growth does NOT change Scroll when the user was
+// scrolled up (not anchored at maxScroll).
+func TestHandleRune_ScrollUnchangedWhenNotAnchored(t *testing.T) {
+	cols := 80
+	m := Model{TermRows: 24, TermCols: cols}
+	for i := 0; i < 25; i++ {
+		m.Messages = append(m.Messages, Message{Text: string(repeatRune('a', cols))})
+	}
+	// maxScroll = 3, but set Scroll to 0 (scrolled way up).
+	m.Scroll = 0
+
+	// Type 80 a's: inputHeight grows from 1 to 2. Scroll stays 0.
+	for i := 0; i < 80; i++ {
+		m.handleRune('a')
+	}
+	if m.Scroll != 0 {
+		t.Errorf("not anchored: Scroll=%d want 0 (unchanged)", m.Scroll)
+	}
+}
+
 // TestCursorRow_DerivesFromCursorX verifies the read-only helper
 // matches the cached cursorY after a series of mutations.
 func TestCursorRow_DerivesFromCursorX(t *testing.T) {
