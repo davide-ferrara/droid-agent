@@ -29,6 +29,9 @@ type Model struct {
 	Mode      Mode
 	ModelName string
 	Err       error
+	// Debug toggles dev-only status-bar info (cols x rows).
+	// Off in normal use; flip on to inspect layouts.
+	Debug bool
 	// Scroll is the index of the first visible message in
 	// Messages. Snap value is max(0, nMsg-chatAreaRows) so the
 	// most recent messages stay on the bottom. PageUp/PageDown

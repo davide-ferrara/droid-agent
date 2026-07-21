@@ -17,36 +17,33 @@
   allocation-free in the common case.
 - Row-level dirty mask (`dirtyRows`) — only changed rows are
   rewritten; cursor-only moves skip `Render` entirely.
+- Scrolling via `Model.Scroll` + PageUp/PageDown; `NewView` clamps
+  to the valid viewport, `handleEnter` snaps to latest.
+- `Render` clears stale bytes with `ESC[K` (skips status row so
+  the embedded cyan fill survives).
 
 ## Issues / smells
 1. `input.go:98` `handleCtrl` only handles Ctrl-H/Backspace/Enter/
    Ctrl-J. Ctrl-C is handled in `HandleInput` as `KindQuit`, Ctrl-D
    returns via `KindEOF` — neither logs before exit except `KindQuit`
    prints `"CtrlC"`. Inconsistent.
-2. `view.go:39-41` — status bar appends `cols`x`rows` using `int64`
-   cast on each call; minor, but `strconv.AppendInt(buf, int64(...),
-   10)` on every keystroke is wasteful. Wrap width inside a debug
-   toggle.
-3. `debug.go` `dbgInput`/`dbgModel` always log via `log.Printf` even
-   in release. No build tag or `if debug {}` gate. Clutters logs in
-   production.
-4. `model.go:36` — `ModelName: "DeepSeek v4 (Pro)"` hardcoded; no
+2. `model.go:36` — `ModelName: "DeepSeek v4 (Pro)"` hardcoded; no
    config injection despite AGENTS.md mentioning swappable offline
    models (Qwen/DeepSeek). Should come from config.
-5. `input.go:109` — `handleCSI` only handles Left/Right; up/down/
-   Home/End/Delete/PageUp/PageDown are silently logged-and-dropped.
+3. `input.go:109` `handleCSI` only handles Left/Right/PageUp/
+   PageDown; up/down/Home/End/Delete are silently logged-and-dropped.
    At least `Home`/`End` trivial given current `buf`.
-6. `view.go:78` — Truncation is byte-based; UTF-8 multi-byte chars
+4. `view.go:78` — Truncation is byte-based; UTF-8 multi-byte chars
    (e.g. Italian accents, emoji) will be cut mid-rune and corrupt
    the terminal line. Needs `runewidth` / rune-aware truncation.
-7. `view.go:97-101` — Each displayed message still allocates one
+5. `view.go:97-101` — Each displayed message still allocates one
    `[]byte(Text[:clamp])` per frame. Bounded by `chatAreaRows` (~22)
    so not urgent; pool into a `msgScratch [][]byte` when this
    matters.
+6. `model.go` `NewModel` still embeds the DEBUG 100-message seed.
+   Remove once real agent output is wired in.
 
 ## Architectural gaps
-- No scrolling / message history navigation (the `start` offset in
-  `NewView` is a stub for this; needs `Model.scroll` + PageUp/PageDN).
 - No streaming output / spinners for `ModeLoading` and
   `ModeStreaming`.
 - No theming hook (AGENTS.md lists Theming as a goal); ANSI color
@@ -56,16 +53,13 @@
 # What to implement right now (priority order)
 
 1. **Hardcode removal** — pass `ModelName` and status text in from
-   config/main, not `NewModel`.
+   config/main, not `NewModel`. Also removes the DEBUG seed block.
 2. **Theming stub** — `type Theme struct{ StatusBarBg, StatusBarFg
    [3]byte }`, pass into `statusBarView`. Replaces raw
    `\033[38;2;0;0;0m\033[48;2;0;180;244m` literal.
 3. **`Home`/`End`/`Delete` CSI** in `handleCSI` — trivial given
    existing cursor logic.
-4. **Debug gating** — `dbgInput`/`dbgModel` behind a build tag
-   (`//go:build debug`) or a `Model.debug bool`. Stops log spam in
-   release.
-5. **Rune-aware truncation** — swap byte slicing in `view.go:78`
+4. **Rune-aware truncation** — swap byte slicing in `view.go:78`
    for a `runewidth`-based wrapper so UTF-8 renders cleanly.
 
 Closed in this pass:
@@ -92,3 +86,17 @@ Closed in this pass:
   `cols-1` — cursor can no longer float past content on shrink.
 - `Input.cursorY` comment is now honest: reserved for future
   soft-wrap, always 0 today.
+- `HandleLine` caps at `cols` (NOTE marks future soft-wrap spot);
+  no more offscreen cursor drift.
+- `Model.Scroll` + `pageUpShift`/`pageDownShift`; `NewView` clamps
+  to `[0, max(0, nMsg-chatAreaRows)]`, `handleEnter` snaps to
+  latest.
+- `Render` emits `ESC[K` after each row to wipe stale bytes;
+  skips the status row so the embedded cyan fill survives.
+- DEBUG seed of 100 messages in `NewModel` for scroll testing.
+- `dbgInput`/`dbgModel` gated by `//go:build debug` tag — release
+  builds pull no `log` import and emit no debug output. Build
+  with `go build -tags debug`.
+- Status bar cols x rows display gated by a `Model.Debug` runtime
+  flag — off by default, no per-keystroke `AppendInt` cost in
+  normal use.
