@@ -240,12 +240,43 @@ func inputLineToBuf(model *Model, screen [][]byte) {
 			}
 			continue
 		}
-		if col+w > cols {
-			// Wide rune doesn't fit: fill the trailing blank
-			// gap on the current row with spaces (its scratch
-			// only has the runes, not the visual padding past
-			// col), then advance to the next row at col 0.
+		if r == ' ' {
+			if col+1 > cols {
+				// Space at overflow: consume as word-wrap break.
+				row++
+				col = 0
+				if row >= len(scratches) {
+					break
+				}
+				continue
+			}
 			if row < len(scratches) {
+				scratches[row] = utf8.AppendRune(scratches[row], r)
+			}
+			col++
+			continue
+		}
+		if col+w > cols {
+			// Non-space overflow: try word-wrap at last space.
+			if row < len(scratches) {
+				s := scratches[row]
+				lastSpace := bytes.LastIndexByte(s, ' ')
+				if lastSpace >= 0 {
+					tail := s[lastSpace+1:]
+					scratches[row] = s[:lastSpace]
+					row++
+					col = 0
+					if row < len(scratches) {
+						scratches[row] = append(scratches[row], tail...)
+						scratches[row] = utf8.AppendRune(scratches[row], r)
+					}
+					for _, tr := range []rune(string(tail)) {
+						col += runeWidth(tr)
+					}
+					col += w
+					continue
+				}
+				// Hard-wrap: fill trailing blank gap.
 				for len(scratches[row]) < cols {
 					scratches[row] = append(scratches[row], ' ')
 				}

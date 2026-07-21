@@ -1,6 +1,9 @@
 package tui
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 // TestHandleLine_AppendsAndSetsCursor exercises HandleLine with
 // ASCII, multi-byte Latin, CJK, and a 4-byte emoji in one go:
@@ -361,6 +364,129 @@ func TestHandleRune_ScrollUnchangedWhenNotAnchored(t *testing.T) {
 	}
 	if m.Scroll != 0 {
 		t.Errorf("not anchored: Scroll=%d want 0 (unchanged)", m.Scroll)
+	}
+}
+
+// TestWrapRow_WordWrap verifies that wrapRow breaks at the last
+// space before overflow instead of hard-wrapping mid-word.
+func TestWrapRow_WordWrap(t *testing.T) {
+	cols := 10
+
+	// "hello bigworld": space at idx 5, "bigworld" overflows.
+	buf := []rune("hello bigworld")
+	row, col := wrapRow(buf, len(buf), cols)
+	if row != 1 || col != 8 {
+		t.Errorf("hello bigworld @10: got (%d,%d) want (1,8)", row, col)
+	}
+
+	// "hello   bigworld": three spaces, last at idx 7. Break after
+	// the last space. Row 0: "hello  " (7 cols). Row 1: "bigworld".
+	buf = []rune("hello   bigworld")
+	row, col = wrapRow(buf, len(buf), cols)
+	if row != 1 || col != 8 {
+		t.Errorf("hello+3spaces+bigworld @10: got (%d,%d) want (1,8)", row, col)
+	}
+
+	// "hello big": no overflow, single row.
+	buf = []rune("hello big")
+	row, col = wrapRow(buf, len(buf), cols)
+	if row != 0 || col != 9 {
+		t.Errorf("hello big @10: got (%d,%d) want (0,9)", row, col)
+	}
+
+	// "nospace": no spaces at all, hard-wrap at col boundary.
+	buf = []rune("nospace")
+	row, col = wrapRow(buf, len(buf), 4)
+	if row != 1 || col != 3 {
+		t.Errorf("nospace @4: got (%d,%d) want (1,3)", row, col)
+	}
+
+	// "abcdef gh": space at idx 6, overflow at idx 7 ('g').
+	// Word-wrap: break after space. Row 1: "gh" at cols 0-1.
+	buf = []rune("abcdef gh")
+	row, col = wrapRow(buf, len(buf), 7)
+	if row != 1 || col != 2 {
+		t.Errorf("abcdef gh @7: got (%d,%d) want (1,2)", row, col)
+	}
+
+	// Space at exact overflow point: "abcdef g" @7.
+	// 'g' overflows (col=6+1=7, cols=7, but col+w=7+1=8>7).
+	// Wait, let me recalculate. 7 chars: a-f=6, space=7th char.
+	// Actually "abcdef g" = 8 runes. Let me just check the behavior.
+	buf = []rune("abcdefg h")
+	// "abcdefg" = 7 cols, overflow at ' ' (col=7, col+1=8>7).
+	// Space consumed as break.
+	row, col = wrapRow(buf, len(buf), 7)
+	// Row 0: "abcdefg" (7 cols). Row 1: "h" (1 col).
+	// Wait, let me trace: no space before the overflow.
+	// Actually "abcdefg" has no spaces. The first space is at idx 7.
+	// col after "abcdefg": col=7. Space: col+1=8>7 → consumed.
+	// Then 'h' at row=1, col=1.
+	if row != 1 || col != 1 {
+		t.Errorf("abcdefg h @7: got (%d,%d) want (1,1)", row, col)
+	}
+
+	// Cursor at a position before the word-wrap break should
+	// still be on row 0 (the break happens at a later rune).
+	buf = []rune("hello bigworld")
+	row, col = wrapRow(buf, 6, cols) // idx 6 = 'b' (first char after space)
+	if row != 0 || col != 6 {
+		t.Errorf("cursor at 'b' @10: got (%d,%d) want (0,6)", row, col)
+	}
+	row, col = wrapRow(buf, 5, cols) // idx 5 = ' ' (the space itself)
+	if row != 0 || col != 5 {
+		t.Errorf("cursor at space @10: got (%d,%d) want (0,5)", row, col)
+	}
+}
+
+// TestInputLineToBuf_WordWrap verifies that inputLineToBuf breaks
+// at word boundaries, consuming the space at the break point.
+func TestInputLineToBuf_WordWrap(t *testing.T) {
+	cols, rows := 10, 24
+
+	// "hello bigworld" should split as "hello" / "bigworld".
+	buf := "hello bigworld"
+	m := newModelWithInput(buf, cols, rows)
+	m.screen = make([][]byte, rows)
+	m.blank = make([]byte, cols)
+	reallocInputScratches(&m)
+
+	inputLineToBuf(&m, m.screen)
+
+	top := inputRow(&m)
+	wantRow0 := []byte("hello")
+	wantRow1 := []byte("bigworld")
+	if got := m.screen[top]; !bytes.Equal(got, wantRow0) {
+		t.Errorf("row 0: got %q want %q", got, wantRow0)
+	}
+	if got := m.screen[top+1]; !bytes.Equal(got, wantRow1) {
+		t.Errorf("row 1: got %q want %q", got, wantRow1)
+	}
+}
+
+// TestInputLineToBuf_WordWrapConsumedSpace verifies that a space
+// at the overflow point is consumed (not rendered on either row).
+func TestInputLineToBuf_WordWrapConsumedSpace(t *testing.T) {
+	cols, rows := 7, 24
+
+	// "abcdefg h": after "abcdefg" (7 cols), space at overflow
+	// point should be consumed. "h" starts on row 1.
+	buf := "abcdefg h"
+	m := newModelWithInput(buf, cols, rows)
+	m.screen = make([][]byte, rows)
+	m.blank = make([]byte, cols)
+	reallocInputScratches(&m)
+
+	inputLineToBuf(&m, m.screen)
+
+	top := inputRow(&m)
+	wantRow0 := []byte("abcdefg")
+	wantRow1 := []byte("h")
+	if got := m.screen[top]; !bytes.Equal(got, wantRow0) {
+		t.Errorf("row 0: got %q want %q", got, wantRow0)
+	}
+	if got := m.screen[top+1]; !bytes.Equal(got, wantRow1) {
+		t.Errorf("row 1: got %q want %q", got, wantRow1)
 	}
 }
 

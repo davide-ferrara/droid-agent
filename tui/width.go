@@ -62,14 +62,43 @@ func wrapRow(buf []rune, idx int, cols int) (row, col int) {
 	if idx > len(buf) {
 		idx = len(buf)
 	}
+	row, col = 0, 0
+	lastSpace := -1
+	rowStart := 0
 	for i := 0; i < idx; i++ {
-		w := runeWidth(buf[i])
+		r := buf[i]
+		w := runeWidth(r)
 		if w == 0 {
 			continue
 		}
+		if r == ' ' {
+			if col+1 > cols {
+				row++
+				rowStart = i + 1
+				col = 0
+				lastSpace = -1
+				continue
+			}
+			lastSpace = i
+			col++
+			continue
+		}
 		if col+w > cols {
+			if lastSpace >= rowStart {
+				row++
+				rowStart = lastSpace + 1
+				col = 0
+				for j := rowStart; j <= i; j++ {
+					col += runeWidth(buf[j])
+				}
+				lastSpace = -1
+				continue
+			}
 			row++
-			col = 0
+			rowStart = i
+			col = w
+			lastSpace = -1
+			continue
 		}
 		col += w
 	}
