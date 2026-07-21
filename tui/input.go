@@ -2,100 +2,130 @@ package tui
 
 import (
 	"bufio"
-	"bytes"
 	"log"
 
 	"droid/term"
 )
 
-type Input struct {
-	buf     []byte // user input text, raw bytes
-	x       int    // screen column where the input area starts (0 = left edge)
-	cursorX int    // byte offset of the cursor within buf (0 = before first char)
-	cursorY int    // wrapped row the cursor sits on, 0-indexed (kept in sync with cursorX via syncCursorY)
-}
-
-// cursorRow derives which wrapped input row the cursor occupies,
-// given the current column count. 0 = first row. Math:
-//   - cursorX==0: start of row 0
-//   - cursorX>0: cursor sits just after the char at index
-//     cursorX-1; that char lives on row (cursorX-1)/cols, so
-//     we return the same.
-//
-// Mirrors the cursorY field; kept as a derivation helper for
-// syncCursorY. ASCII-only for now — rune-aware math replaces
-// this when HandleLine accepts runes.
-func (in *Input) cursorRow(cols int) int {
-	if in.cursorX == 0 || cols <= 0 {
-		return 0
+// trimSpaceRunes is the []rune equivalent of bytes.TrimSpace —
+// drops leading and trailing Unicode whitespace. We use it
+// instead of bytes.TrimSpace because Input.buf is now []rune.
+func trimSpaceRunes(buf []rune) []rune {
+	start, end := 0, len(buf)
+	for start < end && isSpaceRune(buf[start]) {
+		start++
 	}
-	return (in.cursorX - 1) / cols
+	for end > start && isSpaceRune(buf[end-1]) {
+		end--
+	}
+	return buf[start:end]
 }
 
-// syncCursorY recomputes cursorY from cursorX. Call after any
-// mutation that touches cursorX so the on-screen row stays
-// consistent with Left/Right/Backspace/Enter movements.
-func (in *Input) syncCursorY(cols int) {
-	in.cursorY = in.cursorRow(cols)
+// isSpaceRune reports whether r is whitespace per Unicode.
+// Mirrors unicode.IsSpace without pulling the unicode package
+// in for one commonly-used helper.
+func isSpaceRune(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '\v', '\f', '\r',
+		0x85, 0xA0,
+		0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000:
+		return true
+	}
+	return false
+}
+
+type Input struct {
+	// buf holds the user's input as runes. Storing runes instead
+	// of bytes keeps cursorX a rune index, so HandleBackspace /
+	// Left / Right move a whole grapheme cluster at a time even
+	// when bytes are split across multi-byte UTF-8 sequences.
+	buf []rune
+	// x is the screen column where the input area starts (0 = left edge).
+	x int
+	// cursorX is the rune index of the cursor within buf
+	// (0 = before first rune, len(buf) = past the last).
+	cursorX int
+	// cursorY is the wrapped input row the cursor sits on,
+	// derived from cursorX via wrapRow and cached here so
+	// MoveCursorTo doesn't have to re-walk the buffer.
+	cursorY int
+	// cursorCol is the column within the wrapped row where the
+	// cursor sits, derived from wrapRow alongside cursorY. It's
+	// the display column (sum of rune widths), not a byte offset,
+	// so wide runes that filled a partial row count correctly.
+	cursorCol int
+}
+
+// cursorRow returns the wrapped input row the cursor currently
+// occupies, derived from the buffer (independent of the cached
+// cursorY field). Used by callers that need to know what would
+// happen at the current cursor if the wrap math were re-run.
+func (in *Input) cursorRow(cols int) int {
+	row, _ := wrapRow(in.buf, in.cursorX, cols)
+	return row
+}
+
+// syncCursor re-derives cursorY and cursorCol from cursorX using
+// wrapRow. Call after any mutation that touches cursorX or buf
+// so the cached on-screen (row, col) stays consistent.
+func (in *Input) syncCursor(cols int) {
+	in.cursorY, in.cursorCol = wrapRow(in.buf, in.cursorX, cols)
 }
 
 // MoveCursorTo repositions the terminal cursor on its wrapped
-// input row. row is the TOP of the input area (inputRow); we
-// add cursorY to land on the active row and compute the column
-// as cursorX minus the rows already filled.
-func (in *Input) MoveCursorTo(row, cols int) {
-	col := in.cursorX - in.cursorY*cols
-	if col < 0 {
-		col = 0
-	}
-	term.MoveCursor(row+in.cursorY+1, in.x+col+1)
+// input row using the cached cursorY / cursorCol. row is the
+// top of the input area (inputRow); the actual terminal row is
+// row + cursorY.
+func (in *Input) MoveCursorTo(row int) {
+	term.MoveCursor(row+in.cursorY+1, in.x+in.cursorCol+1)
 }
 
+// HandleBackspace removes one rune to the left of the cursor.
+// Because buf is []rune, this always removes a whole UTF-8
+// sequence even if it's 2-4 bytes long (e.g. one emoji press).
 func (in *Input) HandleBackspace(cols int) {
 	if in.cursorX == 0 {
 		return
 	}
 	in.buf = append(in.buf[:in.cursorX-1], in.buf[in.cursorX:]...)
 	in.cursorX--
-	in.syncCursorY(cols)
+	in.syncCursor(cols)
 	dbgInput(in)
 }
 
+// HandleEnter clears the input buffer back to the empty state.
+// Called after the message has been appended to Model.Messages.
 func (in *Input) HandleEnter() {
 	in.buf = in.buf[:0]
 	in.cursorX = 0
 	in.cursorY = 0
+	in.cursorCol = 0
 	dbgInput(in)
 }
 
-// HandleLine appends a printable byte to the input buffer.
-// When the cursor sits at the right edge, the wrapped row count
-// (cursorY) bumps by one so the next row below becomes a fresh
-// empty writing line; the already-typed full-width line stays
-// rendered one row above. cursorY is then re-synced from
-// cursorX (the explicit bump is preserved for readability —
-// syncCursorY lands on the same value).
-func (in *Input) HandleLine(ch byte, cols int) {
-	if cols > 0 && in.cursorX > 0 && in.cursorX%cols == 0 {
-		in.cursorY++
-	}
-	in.buf = append(in.buf, ch)
+// HandleLine appends a printable rune to the input buffer.
+// The wrap math is left to wrapRow (called via syncCursor), so
+// wide runes (CJK, emoji) advance the right number of columns
+// and combining marks (runeWidth 0) sit on the same cell as
+// the previous rune without advancing the layout.
+func (in *Input) HandleLine(r rune, cols int) {
+	in.buf = append(in.buf, r)
 	in.cursorX++
-	in.syncCursorY(cols)
+	in.syncCursor(cols)
 	dbgInput(in)
 }
 
 func (in *Input) HandleLeft(cols int) {
 	if in.cursorX > 0 {
 		in.cursorX--
-		in.syncCursorY(cols)
+		in.syncCursor(cols)
 	}
 }
 
 func (in *Input) HandleRight(cols int) {
 	if in.cursorX < len(in.buf) {
 		in.cursorX++
-		in.syncCursorY(cols)
+		in.syncCursor(cols)
 	}
 }
 
@@ -135,7 +165,7 @@ func (m *Model) markChatRowsDirty() {
 
 func (m *Model) renderFrame() {
 	Render(NewView(m), m.dirtyRows, statusBarRow(m.TermRows))
-	m.Input.MoveCursorTo(inputRow(m), m.TermCols)
+	m.Input.MoveCursorTo(inputRow(m))
 }
 
 func (m *Model) pollResize() bool {
@@ -143,13 +173,12 @@ func (m *Model) pollResize() bool {
 	if cols != m.TermCols || rows != m.TermRows {
 		m.TermCols, m.TermRows = cols, rows
 		// Clamp cursor to the buffer end and re-sync its wrapped
-		// row. Input byte offsets don't need a cols-based clamp
-		// anymore — syncCursorY derives the row from cursorX
-		// and cols, so a horizontal shrink just rewraps.
+		// row. SyncCursor derives cursorY/cursorCol from cursorX
+		// via wrapRow, so a horizontal shrink just rewraps.
 		if m.Input.cursorX > len(m.Input.buf) {
 			m.Input.cursorX = len(m.Input.buf)
 		}
-		m.Input.syncCursorY(cols)
+		m.Input.syncCursor(cols)
 		// NewView will realloc the persistent buffers on size
 		// change; mark every row dirty so the first post-resize
 		// paint covers the whole screen.
@@ -161,13 +190,17 @@ func (m *Model) pollResize() bool {
 	return false
 }
 
-func (m *Model) handleChar(ch byte) {
+// handleRune processes a printable rune from term.ReadKey. The
+// wrap math is rune-aware: wide runes bump inputHeight only when
+// they actually overflow a row, and combining marks leave the
+// layout untouched.
+func (m *Model) handleRune(r rune) {
 	// Detect a wrap-height change so we know whether to repaint
 	// just the active input row or also the chat rows (which
 	// shift up when input grows).
 	beforeRows := inputHeight(m)
 	beforeCursorRow := m.Input.cursorRow(m.TermCols)
-	m.Input.HandleLine(ch, m.TermCols)
+	m.Input.HandleLine(r, m.TermCols)
 	afterRows := inputHeight(m)
 	afterCursorRow := m.Input.cursorRow(m.TermCols)
 	if beforeRows != afterRows {
@@ -211,7 +244,7 @@ func (m *Model) handleBackspace() {
 func (m *Model) handleEnter() {
 	// Check for empty messages, or messages with only spaces.
 	// Opencode allow you to sent messages with only spaces, not here.
-	if len(bytes.TrimSpace(m.Input.buf)) == 0 {
+	if len(trimSpaceRunes(m.Input.buf)) == 0 {
 		return
 	}
 	m.Messages = append(m.Messages, Message{Role: "user", Text: string(m.Input.buf)})
@@ -234,14 +267,15 @@ func (m *Model) handleEnter() {
 // handleLeft / handleRight are cursor-only moves. The buffer
 // content is unchanged so there is nothing to repaint regardless
 // of whether the cursor stays on the same wrapped row or crosses
-// a wrap boundary — MoveCursorTo recomputes the (row, col) on
-// its own. Skip the move entirely when the cursor is already at
-// an edge and didn't move.
+// a wrap boundary — MoveCursorTo uses the cached cursorY /
+// cursorCol recomputed by syncCursor inside HandleLeft/Right.
+// Skip the move entirely when the cursor is already at an edge
+// and didn't move.
 func (m *Model) handleLeft() {
 	before := m.Input.cursorX
 	m.Input.HandleLeft(m.TermCols)
 	if m.Input.cursorX != before {
-		m.Input.MoveCursorTo(inputRow(m), m.TermCols)
+		m.Input.MoveCursorTo(inputRow(m))
 	}
 }
 
@@ -249,7 +283,7 @@ func (m *Model) handleRight() {
 	before := m.Input.cursorX
 	m.Input.HandleRight(m.TermCols)
 	if m.Input.cursorX != before {
-		m.Input.MoveCursorTo(inputRow(m), m.TermCols)
+		m.Input.MoveCursorTo(inputRow(m))
 	}
 }
 
@@ -322,7 +356,7 @@ func HandleKeyPress(reader *bufio.Reader, model *Model) {
 			log.Println("CtrlC")
 			return
 		case term.KindPrintable:
-			model.handleChar(ev.Byte)
+			model.handleRune(ev.Rune)
 		case term.KindCtrl:
 			model.handleCtrl(ev.Byte)
 		case term.KindCSI:

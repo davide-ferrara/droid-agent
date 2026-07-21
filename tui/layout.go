@@ -13,17 +13,16 @@ package tui
 // statusBarHeight is the number of rows the status bar occupies.
 const statusBarHeight = 1
 
-// inputHeight is the number of rows the input area occupies,
-// derived from the byte length of the input buffer so the chat
-// area shrinks exactly as the buffer wraps. Floors at 1.
-// TODO: byte-based math is ASCII-only; switch to rune-width-aware
-// truncation when HandleLine accepts runes.
+// inputHeight is the number of rows the input area occupies
+// given the rune widths of its buffer; the chat area shrinks by
+// the same count. Floors at 1. Walks runes with wrapRow so wide
+// runes (CJK, emoji) and combining marks count correctly.
 func inputHeight(m *Model) int {
-	cols := m.TermCols
-	if cols <= 0 || len(m.Input.buf) == 0 {
+	if m.TermCols <= 0 || len(m.Input.buf) == 0 {
 		return 1
 	}
-	return (len(m.Input.buf)-1)/cols + 1
+	row, _ := wrapRow(m.Input.buf, len(m.Input.buf), m.TermCols)
+	return row + 1
 }
 
 func inputRow(m *Model) int      { return m.TermRows - statusBarHeight - inputHeight(m) }

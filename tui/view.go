@@ -4,6 +4,7 @@ package tui
 import (
 	"bytes"
 	"strconv"
+	"unicode/utf8"
 
 	"droid/term"
 )
@@ -79,11 +80,19 @@ func reallocScreenBufs(model *Model) {
 	reallocInputScratches(model)
 }
 
+// maxBytesPerCol is the worst-case byte-to-column ratio for a
+// UTF-8 encoded input row. Real input rarely hits it (a row of
+// 4-byte emoji uses 2 cols each → 2 bytes/col; 2-byte Latin
+// accents use 1 col each → 2 bytes/col); we leave headroom so
+// the per-row scratch never needs to grow mid-frame.
+const maxBytesPerCol = 4
+
 // reallocInputScratches grows the per-row scratch slice for the
-// input area so each wrapped row has its own [cols]byte backing.
-// Reuses (reslicing to cols) when the same row is kept across a
-// resize; allocates fresh when the row count grows or a row's
-// capacity is below cols.
+// input area so each wrapped row has its own backing []byte with
+// capacity maxBytesPerCol*cols — enough to hold the row's UTF-8
+// encoding without reallocating. Reuses (reslicing to len 0)
+// existing scratches across frames; allocates fresh only when
+// the row count grows or a row's capacity is below the threshold.
 func reallocInputScratches(model *Model) {
 	need := inputHeight(model)
 	if cap(model.inputScratches) < need {
@@ -91,11 +100,12 @@ func reallocInputScratches(model *Model) {
 	} else {
 		model.inputScratches = model.inputScratches[:need]
 	}
+	want := maxBytesPerCol * model.TermCols
 	for i := range model.inputScratches {
-		if cap(model.inputScratches[i]) < model.TermCols {
-			model.inputScratches[i] = make([]byte, model.TermCols)
+		if cap(model.inputScratches[i]) < want {
+			model.inputScratches[i] = make([]byte, 0, want)
 		} else {
-			model.inputScratches[i] = model.inputScratches[i][:model.TermCols]
+			model.inputScratches[i] = model.inputScratches[i][:0]
 		}
 	}
 }
@@ -153,26 +163,64 @@ func statusBarToBuf(model *Model, screen [][]byte) {
 
 // inputLineToBuf writes the wrapped input area into its layout
 // rows. Each wrapped row gets its own dedicated scratch backing
-// (model.inputScratches[i]) so they don't alias each other or
-// the shared blank. The slice of buf that belongs on row i is
-// the half-open interval [i*cols, (i+1)*cols) clamped to buf
-// length.
+// (model.inputScratches[i]); the scratch is rebuilt per frame by
+// walking the rune buffer with the same width math as wrapRow,
+// so wide runes that don't fit jump to the next row leaving a
+// trailing blank on the previous one. Combining marks (width 0)
+// are encoded right after the previous rune so the terminal
+// overlays them; they don't advance the column.
+//
+// Trailing blanks are not written: Render's ESC[K already clears
+// everything past the row's bytes, so a scratch only needs to
+// hold the actual content up to its used column count (plus
+// padding spaces that fill gaps left by wide runes).
 func inputLineToBuf(model *Model, screen [][]byte) {
 	top := inputRow(model)
 	cols := model.TermCols
 	buf := model.Input.buf
-	for i, scratch := range model.inputScratches {
-		copy(scratch, model.blank)
-		start := i * cols
-		if start > len(buf) {
-			start = len(buf)
+	scratches := model.inputScratches
+	for i := range scratches {
+		scratches[i] = scratches[i][:0]
+	}
+	row, col := 0, 0
+	for _, r := range buf {
+		w := runeWidth(r)
+		if w == 0 {
+			// Combining mark: append its UTF-8 bytes right after
+			// the previous rune. The terminal renders it on top
+			// of the same cell, which is correct.
+			if row < len(scratches) {
+				scratches[row] = utf8.AppendRune(scratches[row], r)
+			}
+			continue
 		}
-		end := start + cols
-		if end > len(buf) {
-			end = len(buf)
+		if col+w > cols {
+			// Wide rune doesn't fit: fill the trailing blank
+			// gap on the current row with spaces (its scratch
+			// only has the runes, not the visual padding past
+			// col), then advance to the next row at col 0.
+			if row < len(scratches) {
+				for len(scratches[row]) < cols {
+					scratches[row] = append(scratches[row], ' ')
+				}
+			}
+			row++
+			col = 0
 		}
-		copy(scratch, buf[start:end])
-		screen[top+i] = scratch
+		if row >= len(scratches) {
+			break
+		}
+		// Pad with spaces up to col so earlier wide-rune gaps
+		// inside the same row resolve to blanks rather than the
+		// next rune's leading content.
+		for len(scratches[row]) < col {
+			scratches[row] = append(scratches[row], ' ')
+		}
+		scratches[row] = utf8.AppendRune(scratches[row], r)
+		col += w
+	}
+	for i := range scratches {
+		screen[top+i] = scratches[i]
 	}
 }
 

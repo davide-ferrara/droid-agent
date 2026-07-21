@@ -20,11 +20,14 @@ ReadKey ─▶ HandleKeyPress ─▶ Input/Model mutation ─▶ NewView
 ```
 
 1. `term.ReadKey` returns one event per key (printable, Ctrl,
-   CSI, EOF, Quit).
+   CSI, EOF, Quit). Printables carry a `Rune` field — multi-byte
+   UTF-8 sequences arriving in raw mode are decoded via
+   `bufio.Reader.ReadRune` so callers never see half-formed
+   sequences.
 2. `HandleKeyPress` calls `pollResize` first — on change it
    recomputes `TermCols`/`TermRows`, clamps the cursor, marks
    every row dirty.
-3. The event is dispatched to `handleChar` / `handleCtrl` /
+3. The event is dispatched to `handleRune` / `handleCtrl` /
    `handleCSI`.
 4. Each handler mutates `Input` or `Messages`, then sets the
    relevant bits in `dirtyRows`. Cursor-only moves skip the
@@ -38,11 +41,13 @@ ReadKey ─▶ HandleKeyPress ─▶ Input/Model mutation ─▶ NewView
 - `tui.go` — `Run()`, opens the input reader and calls
   `HandleKeyPress`.
 - `model.go` — `Model`, `Message`, `Mode`, `NewModel`.
-- `layout.go` — `inputRow` / `statusBarRow` / `chatAreaRows`
-  derived from `inputHeight` + `statusBarHeight` constants so
-  multi-line input growth is a one-line change.
-- `input.go` — `Input` struct (buf, cursor), handlers, the
-  resize poll, the input loop dispatcher.
+- `layout.go` — `inputRow(*Model)` / `statusBarRow(termRows)` /
+  `chatAreaRows(*Model)` derived from `inputHeight(*Model)`
+  (rune-aware) and `statusBarHeight` constant so multi-line
+  input growth is a one-line change conceptually.
+- `input.go` — `Input` struct (`buf []rune`, cursorX rune index,
+  cached cursorY/cursorCol), handlers (`HandleLine` takes a
+  rune), the resize poll, the input loop dispatcher.
 - `view.go` — `NewView` orchestrator + helpers (`sizeOK`,
   `reallocScreenBufs`, `fillBlanks`, `clampScroll`,
   `messagesToBuf`, `statusBarToBuf`, `inputLineToBuf`,
@@ -50,8 +55,11 @@ ReadKey ─▶ HandleKeyPress ─▶ Input/Model mutation ─▶ NewView
 - `render.go` — `Render(screen, dirty, statusRow)` flushes to
   the terminal, applies `ESC[K` after each row except the
   status row.
-- `width.go` — `runeWidth` (delegates to `go-runewidth`) and
-  `truncateToCols`, rune-aware width math for message rows.
+- `width.go` — `runeWidth` (delegates to `go-runewidth`),
+  `truncateToCols` (rune-aware byte-offset truncation for
+  messages), and `wrapRow` which walks runes summing display
+  widths to derive the (row, col) of any cursor index inside
+  a wrapped input buffer.
 - `debug.go` / `release.go` — `//go:build debug` split; the
   release build pulls no `log` import, the debug build ships
   `dbgInput` / `dbgModel` trace logging.
@@ -64,11 +72,13 @@ inputRow .. inputRow+H-1   multi-line input (H rows; grows with the buffer)
 statusBarRow               colored status bar
 ```
 
-`H` = `inputHeight(model)`, derived from the byte length of the
-input buffer — typing past `cols` bumps H to 2, then 3, ... and
-the chat area shrinks by the same amount. The cursor row inside
-the input area is `cursorY` (derived from `cursorX`); the row
-the cursor blinks on is `inputRow + cursorY`.
+`H` = `inputHeight(model)`, derived from the rune-aware
+`wrapRow(buf, len(buf), cols)` so wide runes (CJK, emoji) bump
+the height the right number of times and combining marks don't
+advance it at all. The cursor row inside the input area is
+`cursorY` (cached from `wrapRow`) and the on-screen column is
+`cursorCol`; the cell the cursor blinks on is
+`inputRow + cursorY` at column `cursorCol`.
 
 ## Persistent buffers
 
@@ -107,6 +117,30 @@ regional indicators, and CJK terminal detection are correct.
   runtime `Model.Debug` bool — flip it when you want to inspect
   a layout without rebuilding.
 
+## Tests
+
+Pure-function units in `*_test.go` (run with `go test ./tui/`):
+
+- `width_test.go` — `wrapRow` (ASCII, wide runes, combining
+  marks, bounds clamping) and `truncateToCols` (mixed-UTF-8
+  byte-offset math).
+- `layout_test.go` — `inputHeight` (floor=1, ASCII wrap, wide
+  runes, combining marks), `inputRow`, `chatAreaRows`,
+  `statusBarRow`.
+- `input_test.go` — `HandleLine` (rune append, wrap, wide-rune
+  overflow gap, combining mark no-advance), `HandleBackspace`
+  (whole-rune removal, wrap retract, no-op at zero),
+  `HandleLeft`/`HandleRight` (wrap boundary, no-op at ends),
+  `HandleEnter` (reset), `cursorRow` derivation.
+- `view_test.go` — `inputLineToBuf` (ASCII wraps, wide-rune
+  gap at row end with blank padding, combining mark overlay,
+  mixed-width wraps, empty buffer, scratch backing reuse
+  across frames).
+
+Each pty smoke scenario from the manual wrap-debugging session
+is encoded as a named test case so future regressions are
+caught without re-running the pty harness.
+
 # Pros
 
 - Small and idiomatic. Each file has one responsibility; every
@@ -129,28 +163,23 @@ regional indicators, and CJK terminal detection are correct.
   `screenBuf[-1]`.
 - Debug logging and the cols/rows indicator both gated —
   release builds pull no `log` import.
-- Layout is derived from `inputHeight` + `statusBarHeight`
-  constants, so a multi-line input is a one-line change in
-  principle (the plumbing is ready; see below).
+- Layout is derived from `inputHeight(*Model)` (rune-aware) +
+  `statusBarHeight` constant, so multi-line input growth is a
+  one-line change in principle; the math is centralized.
 - Stack-allocated fixed buffers in `statusBarView` and direct
   `strconv.AppendInt` instead of `fmt.Sprintf` — matches the
   "no Sprintf" rule.
+- Rune-aware input end to end: `term.ReadKey` decodes multi-byte
+  UTF-8 sequences via `bufio.Reader.ReadRune`, `Input.buf` is
+  `[]rune`, `HandleLine` takes a rune, and `wrapRow` sums
+  display widths to derive `(row, col)` so wide runes (CJK,
+  emoji) and combining marks compose correctly inside the wrap.
 
 # Cons / known limits
 
-- Multi-line input is byte-oriented: `HandleLine(ch byte, cols)`
-  operates on raw bytes, so a multi-byte UTF-8 sequence arriving
-  via raw mode is split into per-byte events and corrupts the
-  buffer. Need rune reconstruction before non-ASCII typing
-  composes correctly inside the wrap math.
-- The wrap math itself is byte-based: `cursorRow = (cursorX-1)/cols`
-  and `inputHeight = (len(buf)-1)/cols + 1` assume one byte per
-  column, so any rune wider than 1 byte desyncs the cursor.
-  `width.go` already has rune-aware width math; the input path
-  needs to use it next.
 - No Up/Down CSI handlers — the cursor can only move within a
-  row via Left/Right. Vertical navigation across wrapped rows
-  is the next gap.
+  wrapped row via Left/Right. Vertical navigation across wrapped
+  rows is the next gap.
 - Message rows still hard-truncate at `TermCols` via
   `truncateToCols`. Long messages do not wrap onto the next chat
   row; that's the other half of soft-wrap.
@@ -168,18 +197,20 @@ regional indicators, and CJK terminal detection are correct.
   branch still hit `log.Printf` directly, not gated.
 - DEBUG message seed in `NewModel` (mixed UTF-8 fixtures) needs
   removing once real agent output is wired in.
-- No tests.
+- No end-to-end / pty integration test harness — the smoke
+  scenarios from the wrap-debugging session are encoded as
+  unit tests against the pure functions and `inputLineToBuf`,
+  but nothing drives `HandleKeyPress` over a fake `term` reader.
 - The input loop blocks on `term.ReadKey`. The model is not
   concurrency-safe; everything today runs on the main goroutine.
 
 # Roadmap (priority order)
 
-1. **Rune-aware input + wrap math**
-   `HandleLine` accepts runes, `cursorRow` / `inputHeight` use
-   `runeWidth` (already in `width.go`) instead of byte-index
-   math. Then Up/Down CSI to navigate across wrapped rows by
-   screen row; Enter at end-of-buf submits, Shift+Enter inserts
-   a newline.
+1. **Up/Down CSI to navigate across wrapped rows**
+   Now that `Input.cursorY` is real and stays in sync across
+   wrap math, wire `handleCSI` cases for `term.Up` / `term.Down`
+   so the cursor moves by one wrapped row at a time, snapping to
+   the start or end of the destination row as appropriate.
 2. **Message wrapping**
    `messagesToBuf` today hard-truncates each message to
    `TermCols`; long messages disappear off the right edge. Make
@@ -197,10 +228,14 @@ regional indicators, and CJK terminal detection are correct.
    friends), passed into `statusBarView`. Removes the raw
    `\033[38;2;0;0;0m\033[48;2;0;180;244m` literals. Start
    hardcoded — no config file yet.
-5. **Tests**
-   `truncateToCols`, `clampScroll`, `layout.go` math, the dirty-mask
-   plumbing, and `cursorRow` / `inputHeight` derivation are all
-   pure functions — easy wins. Then add a fake `term` interface
-   for `HandleKeyPress`-level tests.
+5. **Tests — extend to integration level**
+   `wrapRow`, `truncateToCols`, `inputHeight`, `inputRow`,
+   `chatAreaRows`, `HandleLine` / `HandleBackspace` /
+   `HandleLeft` / `HandleRight` / `HandleEnter`, and
+   `inputLineToBuf` are all covered by unit tests encoding the
+   pty smoke scenarios as named cases. Next gap: a fake
+   `term` reader interface so `HandleKeyPress`-level tests can
+   drive multi-event sequences (typing + resizing + scrolling in
+   one run) without spawning a pty.
 
 The next milestone is #1. Everything else stacks on top of it.

@@ -34,3 +34,46 @@ func truncateToCols(s string, cols int) (endByte, usedCols int) {
 	}
 	return endByte, usedCols
 }
+
+// wrapRow walks runes [0, idx) of buf accumulating rune display
+// widths, wrapping to the next row when a rune would overflow
+// cols. Returns the (row, col) of the screen cell where the rune
+// at index idx sits (or, when idx == len(buf), where the cursor
+// would land after the last rune).
+//
+// Rules:
+//
+//	- Combining marks (runeWidth==0) do not advance col.
+//	- Wide runes that don't fit in the remaining cols advance
+//	  to the next row at col 0, leaving the trailing cell(s)
+//	  of the previous row blank (matches inputLineToBuf).
+//	- After the walk, if col == cols the cursor visually sits at
+//	  the start of the next row (a fully-filled row wraps a
+//	  virtual cursor to row+1 col 0).
+//
+// Caller is responsible for ensuring 0 <= idx <= len(buf) and
+// cols > 0; on bad input it returns the zero position.
+func wrapRow(buf []rune, idx int, cols int) (row, col int) {
+	if cols <= 0 || idx < 0 {
+		return 0, 0
+	}
+	if idx > len(buf) {
+		idx = len(buf)
+	}
+	for i := 0; i < idx; i++ {
+		w := runeWidth(buf[i])
+		if w == 0 {
+			continue
+		}
+		if col+w > cols {
+			row++
+			col = 0
+		}
+		col += w
+	}
+	if col == cols {
+		row++
+		col = 0
+	}
+	return row, col
+}

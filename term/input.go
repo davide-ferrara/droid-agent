@@ -7,9 +7,15 @@ import (
 	"log"
 )
 
+// KeyEvent describes one logical key. For KindPrintable the
+// rune is in Rune (Byte is also set for the ASCII subset so
+// existing ASCII-only callers keep working). For KindCtrl the
+// raw control byte is in Byte. For KindCSI the parsed sequence
+// tail is in Seq.
 type KeyEvent struct {
 	Kind byte
 	Byte byte
+	Rune rune
 	Seq  string
 }
 
@@ -31,8 +37,23 @@ func ReadKey(r *bufio.Reader) KeyEvent {
 		return KeyEvent{Kind: KindEOF}
 	}
 
+	// Multi-byte UTF-8 leading byte: put the byte back and let
+	// bufio.Reader decode the full rune (handles 2-, 3-, and
+	// 4-byte sequences, validates continuation bytes, and
+	// replaces invalid encodings with U+FFFD so the caller
+	// never sees a half-formed sequence).
+	if b >= 0x80 {
+		_ = r.UnreadByte()
+		rn, _, err := r.ReadRune()
+		if err != nil {
+			log.Println(err)
+			return KeyEvent{Kind: KindEOF}
+		}
+		return KeyEvent{Kind: KindPrintable, Rune: rn}
+	}
+
 	if b >= 0x20 && b < 0x7F {
-		return KeyEvent{Kind: KindPrintable, Byte: b}
+		return KeyEvent{Kind: KindPrintable, Byte: b, Rune: rune(b)}
 	}
 
 	switch b {

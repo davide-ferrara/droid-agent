@@ -5,7 +5,7 @@ package tui
 import "log"
 
 func dbgInput(in *Input) {
-	log.Printf("input: %s\n", in.buf)
+	log.Printf("input: %s\n", string(in.buf))
 }
 
 func dbgModel(m *Model, cursorRow, cursorCol int) {
@@ -14,8 +14,8 @@ func dbgModel(m *Model, cursorRow, cursorCol int) {
 	log.Printf("Mode: %d", m.Mode)
 	log.Printf("Status: %s", m.Status)
 	log.Printf("ModelName: %s", m.ModelName)
-	log.Printf("Input: x=%d cursorX=%d cursorY=%d buf=%q",
-		m.Input.x, m.Input.cursorX, m.Input.cursorY, m.Input.buf)
+	log.Printf("Input: x=%d cursorX=%d cursorY=%d cursorCol=%d buf=%q",
+		m.Input.x, m.Input.cursorX, m.Input.cursorY, m.Input.cursorCol, string(m.Input.buf))
 	log.Printf("Messages: %d", len(m.Messages))
 	log.Printf("Term cursor: %d,%d", cursorRow, cursorCol)
 	if m.Err != nil {
